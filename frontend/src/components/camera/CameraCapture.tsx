@@ -1,0 +1,239 @@
+import { useEffect, useRef } from "react";
+import { useCamera } from "@/hooks/useCamera";
+import { useVerifySocket } from "@/hooks/useVerifysocket";
+import { useFrameSampler } from "@/hooks/useFrameSampler";
+import { Panel } from "@/components/primitives/Panel";
+import { StateMessage } from "@/components/primitives/StateMessage";
+import { EvidenceConsole } from "@/components/evidence/EvidenceConsole";
+import { ChallengeOverlay } from "./ChallengeOverlay";
+import { LiveTierStatus } from "./LiveTierStatus";
+import { ConnectionBadge } from "./ConnectionBadge";
+
+interface CameraCaptureProps {
+  /** Optional declared document type, forwarded in the WS hello. */
+  docType?: string | null;
+}
+
+/**
+ * Tier-3 live capture (CLAUDE.md §1 / §9): a real getUserMedia WebRTC preview plus a native
+ * WebSocket client to /ws/verify that streams downscaled frames and renders the server's
+ * active-challenge instruction overlay and live per-tier status.
+ *
+ * Wired for REAL. Camera permission/no-device/unsupported states are all designed; the socket
+ * reports its true connection state. If the live-capture backend isn't available, the user sees an
+ * honest "unreachable" state and NO fabricated challenge or signal data ever appears.
+ */
+export function CameraCapture({ docType = null }: CameraCaptureProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const camera = useCamera();
+  const socket = useVerifySocket();
+
+  // Attach / detach the live stream to the <video> element.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && camera.stream) {
+      video.srcObject = camera.stream;
+    }
+    return () => {
+      if (video) video.srcObject = null;
+    };
+  }, [camera.stream]);
+
+  // Stream frames only while the camera is live AND the socket is open.
+  const streaming = camera.state === "live" && socket.state === "open";
+  useFrameSampler({
+    videoRef,
+    enabled: streaming,
+    onFrame: socket.sendFrame,
+  });
+
+  const startSession = async () => {
+    await camera.start();
+    socket.connect(docType);
+  };
+
+  const stopSession = () => {
+    socket.disconnect();
+    camera.stop();
+  };
+
+  // Release everything on unmount (privacy: frames are session-only, never persisted — §10).
+  useEffect(() => {
+    return () => {
+      socket.disconnect();
+      camera.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const showPreview = camera.state === "live" || camera.state === "requesting";
+
+  return (
+    <div className="space-y-4">
+      <Panel
+        title="Live capture · Tier 3"
+        aside={<ConnectionBadge state={socket.state} />}
+        bodyClassName="space-y-4"
+      >
+        <p className="text-sm text-slate-400">
+          For wet-ink, contested, or un-sourceable documents. The server issues an unpredictable
+          physical challenge and verifies the document's tracked motion — defeating photo-of-screen
+          and pre-recorded replay. Frames are processed in memory only and never persisted.
+        </p>
+
+        {/* Preview surface — every camera state is designed. */}
+        <div className="relative overflow-hidden rounded-lg border border-hairline bg-black">
+          {showPreview ? (
+            <>
+              {/* Live, muted, audio-less camera preview — captions are not applicable. */}
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="block aspect-video w-full bg-black object-cover"
+                aria-label="Live camera preview"
+              />
+              <ChallengeOverlay challenge={socket.challenge} />
+              {camera.state === "requesting" && (
+                <div className="absolute inset-0 flex items-center justify-center bg-canvas/60 text-sm text-slate-300">
+                  Waiting for camera permission…
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="aspect-video w-full">
+              <CameraPlaceholder state={camera.state} error={camera.error} onStart={startSession} />
+            </div>
+          )}
+        </div>
+
+        {/* Controls. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {camera.state !== "live" ? (
+            <button
+              type="button"
+              onClick={startSession}
+              disabled={camera.state === "requesting" || camera.state === "unsupported"}
+              className="rounded-md border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Start live session
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={stopSession}
+              className="rounded-md border border-verdict-rejected/50 bg-verdict-rejected-soft px-4 py-2 text-sm font-semibold text-verdict-rejected hover:bg-verdict-rejected/20"
+            >
+              End session
+            </button>
+          )}
+          {socket.notice && (
+            <span className="text-xs text-slate-400" role="status">
+              {socket.notice}
+            </span>
+          )}
+        </div>
+      </Panel>
+
+      {/* Live per-tier status while streaming. */}
+      <LiveTierStatus signals={socket.liveSignals} streaming={streaming} />
+
+      {/* The final verdict, if the server concludes the live session. */}
+      {socket.result && (
+        <EvidenceConsole
+          trust={socket.result}
+          previewUrl={null}
+          isPdf={false}
+          fileName={`live-capture · ${socket.result.session_id}`}
+        />
+      )}
+    </div>
+  );
+}
+
+interface PlaceholderProps {
+  state: ReturnType<typeof useCamera>["state"];
+  error: string | null;
+  onStart: () => void;
+}
+
+/** The designed no-camera / denied / unsupported / error states for the preview surface. */
+function CameraPlaceholder({ state, error, onStart }: PlaceholderProps) {
+  if (state === "unsupported") {
+    return (
+      <StateMessage
+        tone="error"
+        title="Camera not available in this context"
+        detail="getUserMedia requires a secure origin (https or localhost) and a browser with camera support."
+        icon={<span className="text-2xl">⛔</span>}
+      />
+    );
+  }
+  if (state === "denied") {
+    return (
+      <StateMessage
+        tone="error"
+        title="Camera permission denied"
+        detail={error ?? "Grant camera access in your browser's site settings, then start again."}
+        icon={<span className="text-2xl">🚫</span>}
+        action={
+          <button
+            type="button"
+            onClick={onStart}
+            className="rounded-md border border-accent/50 bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent/20"
+          >
+            Try again
+          </button>
+        }
+      />
+    );
+  }
+  if (state === "no-device") {
+    return (
+      <StateMessage
+        tone="error"
+        title="No camera found"
+        detail={error ?? "Connect a camera and try again."}
+        icon={<span className="text-2xl">📷</span>}
+      />
+    );
+  }
+  if (state === "error") {
+    return (
+      <StateMessage
+        tone="error"
+        title="Camera could not start"
+        detail={error ?? "An unexpected camera error occurred."}
+        icon={<span className="text-2xl">⚠</span>}
+        action={
+          <button
+            type="button"
+            onClick={onStart}
+            className="rounded-md border border-accent/50 bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent/20"
+          >
+            Retry
+          </button>
+        }
+      />
+    );
+  }
+  // idle
+  return (
+    <StateMessage
+      tone="info"
+      title="Live capture is off"
+      detail="Start a session to open the camera and stream to the verification pipeline."
+      icon={<span className="text-2xl">▶</span>}
+      action={
+        <button
+          type="button"
+          onClick={onStart}
+          className="rounded-md border border-accent/50 bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent/20"
+        >
+          Start live session
+        </button>
+      }
+    />
+  );
+}

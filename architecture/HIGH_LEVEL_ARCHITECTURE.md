@@ -3,6 +3,13 @@
 > **SuRaksha Cyber Hackathon 2.0 | Canara Bank**
 > Theme 1: Real-Time Anomaly Detection in Financial Documents
 
+> ⚠️ **SUPERSEDED (2026-06-27).** This document describes the original *camera-only* design. The
+> architecture has since changed materially — see **[ADR-001](ADR-001-dual-mode-and-signal-validity.md)**
+> for the current, authoritative design (dual-mode intake, mode-bound detectors, structural/semantic
+> Layer 3, evidence-console framing). Treat the layer *mechanics* below as reference only; do **not**
+> implement the camera-only flow, and do **not** run file-level forensics (ELA / stego / JPEG-copy-move /
+> AI-gen / neural GradCAM) on the camera path.
+
 ---
 
 ## Overview

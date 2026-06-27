@@ -1,0 +1,140 @@
+PROBLEM STATEMENT : 
+SuRaksha Cyber Hackathon 2.0
+Hackathon
+Hosted By - Canara Bank
+Idea Phase
+Apr 29 – May 24, 2026
+8:00 PM – 11:59 PM· Asia/Kolkata
+
+Prototype Phase
+Jun 1 – Jun 30, 2026
+10:00 PM – 11:59 PM· Asia/Kolkata
+
+Online
+Team size: 3 - 5
+9.6K registrations
+Overview
+Themes
+Prizes
+Evaluation Criteria
+Eligibility Criteria
+AMA Session
+Teams
+Discussion
+Overview
+SuRaksha, an initiative by Canara Bank, is a campus-focused hackathon designed to reshape the future of digital security in fintech platforms. In an era of rapid banking digitization, traditional password-based logins are proving insufficient.
+
+This hackathon calls upon innovative minds to develop behavior-based user authentication systems that enable real-time fraud and anomaly detection, support password-less login mechanisms, and ensure a seamless user experience all while upholding the principles of privacy and convenience.
+
+In addition to rethinking authentication, the hackathon addresses one of the most pressing challenges in modern financial services: data privacy. With fintech platforms relying heavily on sensitive customer data to deliver tailored services, safeguarding this data across increasingly interconnected ecosystems is now a critical imperative.
+
+Participants are encouraged to propose solutions that not only fortify data security but also promote transparency, ethical handling, and user trust in data-sharing practices.
+
+TimelinesTimelineParticipants from the 2025 EventParticipants from 2025 EventWinners of Last Year’s Hackathon Receiving Their Cash Award ChequesHackathon Winners
+Themes
+Real-time anomaly detection
+Real-time anomaly detection
+How can a bank automatically detect tampering or changes or forgery attempts made across land records, legal documents and financial statements in real time and provide intelligent insights to support faster, reliable decision-making during underwriting.
+
+Agentic Regulatory Intelligence & Compliance
+Agentic Regulatory Intelligence & Compliance
+Build an Agentic system that monitors regulatory changes, translates them into "Measurable Action Points" (MAPs), assigns them to the correct bank departments, and autonomously validates completion.
+
+Prizes
+Win incredible prizes and opportunities to showcase your innovation to the world. Total ₹1,100,000 in prizes to be won!
+Main Prizes
+First prize
+First prize
+₹500,000
+
+Second prize
+Second prize
+₹300,000
+
+Third prize
+Third prize
+₹200,000
+
+Special Prizes
+Special prize
+₹50,000
+
+
+Evaluation Criteria
+Idea Phase Criteria
+Criteria	Description	Max Marks
+Relevance to Theme	How well does the idea align with the hackathon topic?	10
+Innovation & Uniqueness	Is it a fresh solution, or a new approach to an old solution?	10
+Feasibility	Can this be reasonably built in the hackathon timeframe?	10
+Impact	Will this idea solve a real-world problem? Does it add business/social value?	10
+Clarity of Thought	Is the problem statement and proposed solution clearly defined?	10
+Prototype Phase Criteria
+#	Criteria	Description	Max Marks
+1	Problem Understanding	Depth of insight into the problem. Are they solving the right pain point?	25
+2	Originality / Innovation	Is the idea novel or a significant improvement over existing solutions?	25
+3	Technical Implementation	How well is it built? Code quality, architecture, functionality.	25
+4	Real-World Applicability	Is the solution practical, scalable, or impactful in real-world use cases?	25
+Total	100
+Eligibility Criteria
+Open to undergraduate students currently in their 1st, 2nd, 3rd, or 4th year of study, as well as working professionals with 0–2 years of experience.
+Student participants and working professionals must be enrolled in or affiliated with a recognized university, educational institution, or organization at the time of registration.
+Participation is strictly team-based, with each team consisting of 3–5 members.
+
+
+PROPOSED SOLUTION FOR THEME 1 :
+
+Satyum: Zero-Trust Document Integrity via Signal Intelligence
+Published
+Idea Phase
+Last updated May 28, 2026 10:00 PM IST (Asia/Kolkata)
+Title
+*
+Satyum: Zero-Trust Document Integrity via Signal Intelligence
+Description
+*
+The ProblemCurrent KYC and document verification systems rely on file uploads, making them highly vulnerable to digital tampering, deepfakes, and AI-generated forgeries. Once a forged document enters the banking system, the chain of trust is broken. The Solution: SatyumSatyum (सत्यम् = Truth) is a zero-trust, camera-only document integrity platform built for banks. We eliminate the "file upload" vulnerability entirely. Instead, customers present their documents live via a webcam. Satyum processes the WebRTC stream in real-time through a rigorous 5-layer AI defense pipeline, catching fraud before it ever hits the bank's core systems. No file uploads. No loopholes. Just truth.
+
+The "Wow Factors" — Signal Intelligence
+
+Satyum doesn't just look at pixels; it analyzes the physics of the scene, physiological human traits, and microscopic document anomalies.
+
+
+
+Physiological Micro-Tremor Analysis: Human hands holding documents involuntarily tremor at 8–12 Hz. Satyum's optical flow tracks this; rigid digital displays (screens) fail instantly.
+
+Shadow Geometry & Chromatic Aberration: Real 3D paper casts ambient shadows and refracts light differently through a lens than a flat digital screen. We profile these optical physics to detect screen-spoofing.
+
+rPPG Liveness & Micro-expressions: We extract a live heartbeat (rPPG) from facial skin-tone fluctuations and detect sub-200ms involuntary stress micro-expressions (AUs) during fraud attempts.
+
+GradCAM Explainability: When forgery is detected, Satyum generates auditor-grade GradCAM heatmaps, visually proving exactly which pixels were manipulated.
+
+Behavioral Biometrics & Security Scans: During our physical 3D spatial CAPTCHA (e.g., "tilt the document"), we analyze angular jerk to detect bot-like precision, while scanning for retroreflective holograms and microprinting.
+
+Neural pHash: Every document gets a 256-bit "DNA" fingerprint. If a fraudster tries to launder and resubmit the same forged document in a different session, Satyum cross-matches it instantly.
+
+
+?️ The 5-Layer Defense Pipeline
+
+
+Capture Anti-Spoofing: Moiré FFT, shadow geometry, paper texture FFT.
+
+Identity Verification: rPPG pulse, micro-tremors, deepfake detection.
+
+Document Forensics: Error Level Analysis (ELA), Copy-Move, AI-gen detection, Steganography scan.
+
+Physical CAPTCHA: 3D spatial challenges with behavioral biometric profiling.
+
+Risk Scoring: Aggregates all signals into a final, explainable Trust Score (0-100).
+
+
+Tech Stack
+
+
+Frontend: React, WebRTC (Live Camera Stream)
+
+Backend: FastAPI (Python), WebSocket Orchestrator
+
+AI/Forensics: PyTorch, OpenCV, DeepFace, MediaPipe, NumPy FFT
+
+Infrastructure: Docker, Nginx Refer to Our GitHub for Architecture Here : https://github.com/MOHAMEDAHSAN/Satyum
+
