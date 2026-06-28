@@ -19,34 +19,33 @@ pinning the CCA-India root) can point them at a specific pinned trust store (§5
 
 from __future__ import annotations
 
-from typing import Optional
-
 from app.registry import AnalyzerRegistry
-
-# Tier 1 — cryptographic provenance (the cyber core)
-from verification.signature import C2paProvenanceAnalyzer, PadesSignatureAnalyzer
-from verification.provenance import PdfOnlyRedFlagAnalyzer
-
-# Tier 2 — document forensics / OCR / consistency
-from forensics.ocr import DocumentParseAnalyzer
-from forensics.arithmetic import ArithmeticConsistencyAnalyzer
-from forensics.metadata import PdfStructureAnalyzer
-from forensics.template import TemplateFingerprintAnalyzer
-from forensics.layout import FontLayoutAnalyzer
-from forensics.copy_move import CopyMoveAnalyzer
-from forensics.phash import PhashResubmissionAnalyzer
-
-# Tier 3 — live capture (camera mode)
-from capture.rectify import RectifyQualityAnalyzer
 from capture.antispoof import (
-    SpecularGlareAnalyzer,
     SpectralMoireAnalyzer,
+    SpecularGlareAnalyzer,
     TemporalEntropyAnalyzer,
 )
 from capture.challenge import ActiveChallengeAnalyzer
 
+# Tier 3 — live capture (camera mode)
+from capture.rectify import RectifyQualityAnalyzer
+from forensics.arithmetic import ArithmeticConsistencyAnalyzer
+from forensics.copy_move import CopyMoveAnalyzer
+from forensics.entities import EntityExtractionAnalyzer
+from forensics.layout import FontLayoutAnalyzer
+from forensics.metadata import PdfStructureAnalyzer
 
-def build_registry(trust_anchor_dir: Optional[str] = None) -> AnalyzerRegistry:
+# Tier 2 — document forensics / OCR / consistency
+from forensics.ocr import DocumentParseAnalyzer
+from forensics.phash import PhashResubmissionAnalyzer
+from forensics.template import TemplateFingerprintAnalyzer
+from verification.provenance import PdfOnlyRedFlagAnalyzer
+
+# Tier 1 — cryptographic provenance (the cyber core)
+from verification.signature import C2paProvenanceAnalyzer, PadesSignatureAnalyzer
+
+
+def build_registry(trust_anchor_dir: str | None = None) -> AnalyzerRegistry:
     """Construct and return the fully-wired analyzer registry.
 
     Args:
@@ -71,6 +70,7 @@ def build_registry(trust_anchor_dir: Optional[str] = None) -> AnalyzerRegistry:
     registry.register(PdfStructureAnalyzer())                              # layer 3, order 30 (FILE)
     registry.register(CopyMoveAnalyzer())                                  # layer 3, order 35 (ANY)
     registry.register(PhashResubmissionAnalyzer())                         # layer 3, order 40 (ANY)
+    registry.register(EntityExtractionAnalyzer())                          # layer 3, order 45 (FILE)
 
     # --- Tier 3: anti-spoof votes (CAMERA) — low/medium-weight, never standalone gates ----------
     registry.register(SpectralMoireAnalyzer())                             # layer 1 (camera)

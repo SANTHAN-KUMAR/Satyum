@@ -25,7 +25,7 @@ DB in production and constructed in-memory for tests, and so the analyzer never 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -39,7 +39,7 @@ from app.contracts import (
 try:
     import cv2
 
-    _IMPORT_ERROR: Optional[str] = None
+    _IMPORT_ERROR: str | None = None
 except ImportError as exc:  # pragma: no cover
     cv2 = None  # type: ignore[assignment]
     _IMPORT_ERROR = f"OpenCV unavailable: {exc}"
@@ -74,7 +74,7 @@ class TemplateMatch:
 class TemplateResult:
     evaluated: bool
     corpus_size: int
-    best: Optional[TemplateMatch] = None
+    best: TemplateMatch | None = None
     recognised: bool = False
     reason: str = ""
     scores: list[TemplateMatch] = field(default_factory=list)
@@ -84,7 +84,7 @@ def _orb():
     return cv2.ORB_create(nfeatures=ORB_N_FEATURES)
 
 
-def compute_descriptors(gray: np.ndarray) -> Optional[np.ndarray]:
+def compute_descriptors(gray: np.ndarray) -> np.ndarray | None:
     """ORB descriptors for an image, or None if too few keypoints to fingerprint."""
     _, des = _orb().detectAndCompute(gray, None)
     return des
@@ -174,7 +174,7 @@ class TemplateFingerprintAnalyzer:
     mode = Mode.FILE
     order = 31
 
-    def __init__(self, library: Optional[TemplateLibrary] = None) -> None:
+    def __init__(self, library: TemplateLibrary | None = None) -> None:
         self._library = library if library is not None else TemplateLibrary()
 
     def applicable(self, ctx: AnalysisContext) -> bool:
@@ -183,7 +183,7 @@ class TemplateFingerprintAnalyzer:
         return True
 
     @staticmethod
-    def _gray(ctx: AnalysisContext) -> Optional[np.ndarray]:
+    def _gray(ctx: AnalysisContext) -> np.ndarray | None:
         for key in ("rectified", "page_image", "document_image"):
             img = ctx.shared.get(key)
             if isinstance(img, np.ndarray) and img.size > 0:

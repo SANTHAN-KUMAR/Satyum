@@ -36,7 +36,7 @@ import io
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -112,7 +112,7 @@ def _norm(token: str) -> str:
     return re.sub(r"[^a-z0-9]", "", token.lower())
 
 
-def parse_money(raw: str) -> Optional[Decimal]:
+def parse_money(raw: str) -> Decimal | None:
     """Parse a printed money cell to ``Decimal``; return ``None`` if it is not a number.
 
     Strips currency symbols / 'Rs.' / thousands separators and an optional trailing Dr/Cr marker.
@@ -284,7 +284,7 @@ def _cluster_rows(words: list[_Word]) -> list[list[_Word]]:
     return [sorted(r, key=lambda w: w.left) for r in rows]
 
 
-def _detect_columns(words: list[_Word]) -> tuple[Optional[dict[str, _Column]], Optional[float]]:
+def _detect_columns(words: list[_Word]) -> tuple[dict[str, _Column] | None, float | None]:
     """Find the header row and turn the header words into x-bounded columns.
 
     Returns ``(columns_by_name, header_bottom_y)`` or ``(None, None)`` if a usable header (the
@@ -361,7 +361,7 @@ def _cell_text(cell: list[_Word]) -> str:
     return " ".join(w.text for w in cell)
 
 
-def _union_bbox(cell: list[_Word]) -> Optional[BBox]:
+def _union_bbox(cell: list[_Word]) -> BBox | None:
     """Axis-aligned bounding box that encloses every token in the cell (the evidence region)."""
     if not cell:
         return None
@@ -372,7 +372,7 @@ def _union_bbox(cell: list[_Word]) -> Optional[BBox]:
     return (float(x0), float(y0), float(x1 - x0), float(y1 - y0))
 
 
-def _cell_money(cell: list[_Word]) -> tuple[Optional[Decimal], Optional[BBox]]:
+def _cell_money(cell: list[_Word]) -> tuple[Decimal | None, BBox | None]:
     """Parse the money figure printed in a cell; return its value and the cell's bounding box.
 
     Tesseract often fragments one figure (e.g. ``15,000.00`` -> ``['15,', '000.', '00']``), so we
@@ -389,7 +389,7 @@ def _cell_money(cell: list[_Word]) -> tuple[Optional[Decimal], Optional[BBox]]:
     return None, None
 
 
-def build_statement(words: list[_Word]) -> Optional[StatementData]:
+def build_statement(words: list[_Word]) -> StatementData | None:
     """Assemble a :class:`StatementData` from OCR words, or ``None`` if the table is not locatable.
 
     Honesty contract: every figure comes from a parsed cell. A summary row (Opening / Closing /
@@ -461,7 +461,7 @@ def _to_bgr(pil_image) -> np.ndarray:
     return np.asarray(pil_image.convert("RGB"))[:, :, ::-1].copy()
 
 
-def ocr_word_dicts(words: list["_Word"]) -> list[dict[str, Any]]:
+def ocr_word_dicts(words: list[_Word]) -> list[dict[str, Any]]:
     """The canonical ``ctx.shared['ocr']`` LIST shape consumed by ``FontLayoutAnalyzer``.
 
     One dict per word — ``{text,left,top,width,height,conf,line_num,block_num}``. Tesseract's own

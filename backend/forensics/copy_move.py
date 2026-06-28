@@ -37,7 +37,7 @@ keypoints) — that residual is covered by provenance, arithmetic and resubmissi
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -52,7 +52,7 @@ from app.contracts import (
 try:
     import cv2
 
-    _IMPORT_ERROR: Optional[str] = None
+    _IMPORT_ERROR: str | None = None
 except ImportError as exc:  # pragma: no cover - exercised only on a broken install
     cv2 = None  # type: ignore[assignment]
     _IMPORT_ERROR = f"OpenCV unavailable: {exc}"
@@ -83,12 +83,12 @@ class CopyMoveResult:
     duplicated: bool
     inlier_count: int
     dominant_fraction: float
-    source_bbox: Optional[BBox] = None
-    paste_bbox: Optional[BBox] = None
+    source_bbox: BBox | None = None
+    paste_bbox: BBox | None = None
     reason: str = ""
 
 
-def _to_gray(image: Any) -> Optional[np.ndarray]:
+def _to_gray(image: Any) -> np.ndarray | None:
     if not isinstance(image, np.ndarray) or image.size == 0:
         return None
     if image.ndim == 2:

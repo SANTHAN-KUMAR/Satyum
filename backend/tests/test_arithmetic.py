@@ -9,6 +9,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+
 from app.contracts import AnalysisContext, Mode, SignalStatus
 from forensics.arithmetic import (
     ArithmeticConsistencyAnalyzer,

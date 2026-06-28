@@ -27,7 +27,7 @@ present so the votes operate on the document, not the background; they fall back
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -213,7 +213,7 @@ def _temporal_to_suspicion(var: float, loop_ac: float) -> float:
 # ============================================================================================
 #  Shared helpers + analyzer classes
 # ============================================================================================
-def _document_view(ctx: AnalysisContext) -> Optional[np.ndarray]:
+def _document_view(ctx: AnalysisContext) -> np.ndarray | None:
     """Prefer the rectified document crop; fall back to the latest raw frame."""
     rect = ctx.shared.get("rectified")
     if isinstance(rect, np.ndarray) and rect.ndim == 3 and rect.shape[2] == 3:

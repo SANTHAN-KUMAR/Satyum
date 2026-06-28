@@ -8,7 +8,7 @@ risk engine degrades the verdict accordingly.
 
 from __future__ import annotations
 
-from app.contracts import AnalysisContext, LayerSignal, Mode, SignalStatus, TrustScore
+from app.contracts import AnalysisContext, LayerSignal, Mode, TrustScore
 from app.registry import AnalyzerRegistry
 from risk.audit import AuditLedger
 from risk.engine import aggregate

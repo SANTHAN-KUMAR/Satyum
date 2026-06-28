@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AppHeader } from "./components/AppHeader";
 import { ModeTabs, type IntakeTab } from "./components/ModeTabs";
 import { UploadIntake } from "./components/UploadIntake";
+import { BundleIntake } from "./components/BundleIntake";
 import { CameraCapture } from "./components/camera/CameraCapture";
 import { SampleView } from "./components/SampleView";
 
@@ -23,7 +24,8 @@ export default function App() {
           <div>
             <h2 className="text-lg font-semibold text-slate-100">Verify a document</h2>
             <p className="text-sm text-slate-500">
-              Upload a financial statement, run a live capture, or preview the console layout.
+              Upload a financial statement, cross-check a document bundle, run a live capture, or
+              preview the console layout.
             </p>
           </div>
           <ModeTabs active={tab} onChange={setTab} />
@@ -36,6 +38,7 @@ export default function App() {
           className="animate-fade-in"
         >
           {tab === "upload" && <UploadIntake />}
+          {tab === "bundle" && <BundleIntake />}
           {tab === "camera" && <CameraCapture />}
           {tab === "sample" && <SampleView />}
         </div>

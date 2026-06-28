@@ -35,18 +35,17 @@ from app.contracts import AnalysisContext, Mode, SignalStatus
 pytest.importorskip("cryptography")
 pyhanko = pytest.importorskip("pyhanko")
 
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import NameOID
+from cryptography import x509  # noqa: E402
+from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
+from cryptography.x509.oid import NameOID  # noqa: E402
 
-from verification.signature import (
+from verification.signature import (  # noqa: E402
     PROV_ABSENT,
     PROV_TAMPERED,
     PROV_VERIFIED,
     PadesSignatureAnalyzer,
 )
-
 
 # --------------------------------------------------------------------------------------------------
 # Fixture generation: a real CA, a real leaf, a real signed PDF — all in memory.
@@ -67,7 +66,7 @@ def _name(cn: str) -> x509.Name:
 def _make_ca(cn: str) -> tuple[rsa.RSAPrivateKey, x509.Certificate]:
     """A self-signed CA certificate (basicConstraints CA=True)."""
     key = _gen_key()
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     cert = (
         x509.CertificateBuilder()
         .subject_name(_name(cn))
@@ -95,7 +94,7 @@ def _make_leaf(
 ) -> tuple[rsa.RSAPrivateKey, x509.Certificate]:
     """An end-entity signing certificate issued by ``ca_cert`` (non-repudiation key usage)."""
     key = _gen_key()
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     cert = (
         x509.CertificateBuilder()
         .subject_name(_name(cn))

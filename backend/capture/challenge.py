@@ -32,7 +32,7 @@ attestation and is handled as a separate, low-weight, documented-bypassable chec
 from __future__ import annotations
 
 import math
-from typing import Any, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -87,7 +87,7 @@ def _to_gray(frame: np.ndarray) -> np.ndarray:
     return arr.astype(np.uint8, copy=False)
 
 
-def track_corners(frames: list[np.ndarray]) -> Optional[tuple[np.ndarray, np.ndarray]]:
+def track_corners(frames: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray] | None:
     """Track features from the first to the last frame via pyramidal Lucas-Kanade optical flow.
 
     Returns ``(start_pts, end_pts)`` of the surviving correspondences (Nx2 float32), or ``None`` if
@@ -125,7 +125,7 @@ def track_corners(frames: list[np.ndarray]) -> Optional[tuple[np.ndarray, np.nda
     )
 
 
-def homography_consistency(start: np.ndarray, end: np.ndarray) -> tuple[Optional[np.ndarray], float, float]:
+def homography_consistency(start: np.ndarray, end: np.ndarray) -> tuple[np.ndarray | None, float, float]:
     """Fit one homography start->end and measure how well a SINGLE plane explains the motion.
 
     Returns ``(H, inlier_ratio, median_residual_px)``. A genuine flat document moving rigidly gives
@@ -215,7 +215,7 @@ def _suspicion(axis_ok: bool, magnitude_ok: bool, consistent: bool) -> float:
     return 0.75  # right axis, wrong magnitude -> challenge not satisfied
 
 
-def _validate_challenge(challenge: Any) -> Optional[tuple[str, float]]:
+def _validate_challenge(challenge: Any) -> tuple[str, float] | None:
     """Return (axis, magnitude_deg) from the server challenge, or None if malformed."""
     if not isinstance(challenge, dict):
         return None

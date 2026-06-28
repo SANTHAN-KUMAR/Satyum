@@ -31,10 +31,10 @@ from app.contracts import AnalysisContext, Mode, SignalStatus
 from forensics.arithmetic import ArithmeticConsistencyAnalyzer
 from forensics.ocr import (
     DocumentParseAnalyzer,
+    _ocr_words,
     build_statement,
     is_pdf,
     parse_money,
-    _ocr_words,
 )
 
 # --- Fixture generation: a real, monospaced bank-statement table -------------------------------

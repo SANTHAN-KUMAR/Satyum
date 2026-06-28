@@ -1,0 +1,19 @@
+# Keep the backend image lean and the build context small.
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.git
+node_modules
+frontend/node_modules
+frontend/dist
+# The backend image does not serve the frontend (Vercel does); exclude its source.
+frontend/src
+frontend/public
+# Dev-only sample binaries are not needed in the image (only samples/trust/ is COPYed explicitly).
+samples/pdfs
+samples/statements
+samples/bundle_consistent
+samples/bundle_mismatch

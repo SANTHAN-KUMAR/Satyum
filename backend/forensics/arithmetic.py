@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional
+from typing import Any
 
 from app.config import settings
 from app.contracts import (
@@ -39,32 +39,32 @@ BBox = tuple[float, float, float, float]
 @dataclass
 class Transaction:
     index: int
-    debit: Optional[Decimal] = None
-    credit: Optional[Decimal] = None
-    balance: Optional[Decimal] = None
-    date: Optional[str] = None
-    description: Optional[str] = None
-    balance_bbox: Optional[BBox] = None
+    debit: Decimal | None = None
+    credit: Decimal | None = None
+    balance: Decimal | None = None
+    date: str | None = None
+    description: str | None = None
+    balance_bbox: BBox | None = None
 
 
 @dataclass
 class StatementData:
     """Structured statement, as produced upstream by OCR/parse (ctx.shared['statement'])."""
 
-    opening_balance: Optional[Decimal] = None
-    closing_balance: Optional[Decimal] = None
+    opening_balance: Decimal | None = None
+    closing_balance: Decimal | None = None
     transactions: list[Transaction] = field(default_factory=list)
-    stated_total_debits: Optional[Decimal] = None
-    stated_total_credits: Optional[Decimal] = None
+    stated_total_debits: Decimal | None = None
+    stated_total_credits: Decimal | None = None
 
 
 @dataclass
 class Violation:
     kind: str
-    index: Optional[int]
+    index: int | None
     expected: Decimal
     printed: Decimal
-    bbox: Optional[BBox] = None
+    bbox: BBox | None = None
 
     @property
     def delta(self) -> Decimal:

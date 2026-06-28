@@ -99,7 +99,10 @@ def aggregate(
 
     # --- Tier-2/3 forensic aggregation ----------------------------------------------------
     mean_susp, total_weight = _weighted_suspicion(signals)
-    score = 100.0 * (1.0 - mean_susp)
+    # Round ONCE here so the verdict band and the displayed gauge are derived from the same value.
+    # (Deriving the verdict from an unrounded score while the gauge shows a rounded one let a float
+    # artefact like 59.999999999999986 read as REJECTED while the gauge showed 60.0 / REVIEW.)
+    score = round(100.0 * (1.0 - mean_susp), 2)
 
     tier = "in-person-capture" if intake_mode == Mode.CAMERA else "forensic-fallback"
 

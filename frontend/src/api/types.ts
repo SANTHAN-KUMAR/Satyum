@@ -120,6 +120,51 @@ export interface TrustScore {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Bundle verification (POST /api/verify-bundle) — the cross-document consistency graph (ADR-003 #3).
+// Mirrors backend/app/contracts.py :: BundleDocument, BundleTrustScore and the cross_document signal's
+// measurements emitted by forensics/cross_document.py. Nothing here is invented for the UI.
+// ---------------------------------------------------------------------------------------------
+
+// app/contracts.py :: BundleDocument
+export interface BundleDocument {
+  label: string; // e.g. "doc1:bank_statement.png"
+  trust: TrustScore;
+}
+
+// forensics/cross_document.py :: FieldComparison.status (wire values are lowercase)
+export type CrossFieldStatus = "agree" | "near" | "disagree";
+
+/** One field's cross-document comparison (forensics/cross_document.py measurements.comparisons[]). */
+export interface CrossFieldComparison {
+  field: string; // "pan" | "aadhaar" | "ifsc" | "account_number" | "name" | "dob"
+  status: CrossFieldStatus; // AGREE · NEAR (possible OCR slip → review) · DISAGREE
+  agree: boolean; // status === "AGREE" (kept for convenience; mirrors the backend)
+  values: Record<string, string>; // doc label -> the value that document carries
+}
+
+/** The measurements payload carried on the cross_document LayerSignal. */
+export interface CrossDocumentMeasurements {
+  compared_fields?: string[];
+  documents?: number;
+  comparisons?: CrossFieldComparison[];
+  disagreeing_fields?: string[];
+  hard_mismatch_fields?: string[]; // dispositive identifier mismatches (PAN/Aadhaar/account/dob)
+  near_match_fields?: string[]; // single-char OCR-slip near-matches → REVIEW, not REJECT
+}
+
+// app/contracts.py :: BundleTrustScore
+export interface BundleTrustScore {
+  session_id: string;
+  document_count: number;
+  documents: BundleDocument[];
+  cross_document: LayerSignal; // measurements typed as CrossDocumentMeasurements at use sites
+  bundle_score: number;
+  bundle_verdict: Verdict;
+  fail_closed: boolean;
+  reasons: string[];
+}
+
+// ---------------------------------------------------------------------------------------------
 // Live-capture (WebSocket /ws/verify) protocol — Tier-3 active 3D challenge.
 // Mirrors architecture/BUILD-MANIFEST.md "Active server-randomized 3D challenge": the server
 // issues an unpredictable just-in-time tilt/rotate/proximity command and verifies the tracked

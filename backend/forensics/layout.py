@@ -30,7 +30,7 @@ and provenance's job. Low weight (``settings.weight_font_layout``): a contributi
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -45,7 +45,7 @@ from app.contracts import (
 try:
     import cv2
 
-    _IMPORT_ERROR: Optional[str] = None
+    _IMPORT_ERROR: str | None = None
 except ImportError as exc:  # pragma: no cover
     cv2 = None  # type: ignore[assignment]
     _IMPORT_ERROR = f"OpenCV unavailable: {exc}"
@@ -163,7 +163,7 @@ def _robust_z(values: np.ndarray, scale_floor: float) -> np.ndarray:
     return (values - med) / scale
 
 
-def analyze_layout(words: list[dict[str, Any]], gray: Optional[np.ndarray]) -> LayoutResult:
+def analyze_layout(words: list[dict[str, Any]], gray: np.ndarray | None) -> LayoutResult:
     """Per-line typographic outlier detection. Pure function over OCR words + optional image.
 
     Without the image, stroke width can't be measured, so only baseline and x-height are used
@@ -268,7 +268,7 @@ class FontLayoutAnalyzer:
         return isinstance(ocr, list) and len(ocr) > 0
 
     @staticmethod
-    def _gray(ctx: AnalysisContext) -> Optional[np.ndarray]:
+    def _gray(ctx: AnalysisContext) -> np.ndarray | None:
         for key in ("rectified", "page_image", "document_image"):
             img = ctx.shared.get(key)
             if isinstance(img, np.ndarray) and img.size > 0:

@@ -6,15 +6,30 @@
  * §5/§11). Responses are validated at the boundary (guards.ts) before any component sees them.
  */
 
-import { parseTrustScore } from "./guards";
-import type { TrustScore } from "./types";
+import { parseBundleTrustScore, parseTrustScore } from "./guards";
+import type { BundleTrustScore, TrustScore } from "./types";
 
-/** Relative endpoints. Same-origin → resolved by the dev proxy (vite.config.ts) or Nginx in prod. */
+/**
+ * Optional absolute backend origin for a SPLIT deploy (e.g. a Vercel frontend → a Railway backend).
+ * Set `VITE_API_BASE_URL=https://your-backend.up.railway.app` at build time. When empty, endpoints are
+ * RELATIVE/same-origin — resolved by the Vite dev proxy, an Nginx reverse proxy, or a Vercel rewrite.
+ * Trailing slash trimmed so `${base}/api/...` never double-slashes.
+ */
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+
+/** Endpoint paths (relative). Use {@link apiUrl} to resolve against the optional split-deploy base. */
 export const ENDPOINTS = {
   verify: "/api/verify",
-  /** WebSocket path; the scheme/host are derived from window.location at connect time. */
+  /** Multi-document bundle → the cross-document consistency graph (ADR-003 #3). */
+  verifyBundle: "/api/verify-bundle",
+  /** WebSocket path; the scheme/host are derived from the API base or window.location at connect time. */
   liveVerify: "/ws/verify",
 } as const;
+
+/** Resolve an endpoint path against the optional split-deploy base (absolute in prod, relative else). */
+export function apiUrl(path: string): string {
+  return API_BASE + path;
+}
 
 /** A network or backend failure surfaced honestly to the UI (never swallowed — CLAUDE.md §5). */
 export class ApiError extends Error {
@@ -48,7 +63,7 @@ export async function verifyDocument(file: File, opts: VerifyOptions = {}): Prom
 
   let res: Response;
   try {
-    res = await fetch(ENDPOINTS.verify, {
+    res = await fetch(apiUrl(ENDPOINTS.verify), {
       method: "POST",
       body: form,
       headers: { Accept: "application/json" },
@@ -89,8 +104,64 @@ export async function verifyDocument(file: File, opts: VerifyOptions = {}): Prom
   return parseTrustScore(json);
 }
 
-/** Build the absolute ws(s):// URL for the live-capture socket from the current page origin. */
+/**
+ * POST /api/verify-bundle (multipart/form-data, repeated `files`) → BundleTrustScore.
+ *
+ * Sends 2–12 related documents (statement / ID / deed) under the repeated form field `files`. The
+ * backend verifies each independently AND cross-checks their extracted identity fields, returning
+ * the per-document trust scores plus the cross-document consistency signal (ADR-003 #3).
+ */
+export async function verifyBundle(
+  files: File[],
+  opts: { signal?: AbortSignal } = {},
+): Promise<BundleTrustScore> {
+  const form = new FormData();
+  for (const f of files) form.append("files", f, f.name);
+
+  let res: Response;
+  try {
+    res = await fetch(apiUrl(ENDPOINTS.verifyBundle), {
+      method: "POST",
+      body: form,
+      headers: { Accept: "application/json" },
+      signal: opts.signal,
+    });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    throw new ApiError(
+      "Could not reach the verification service. Confirm the backend is running and reachable.",
+    );
+  }
+
+  if (!res.ok) {
+    let detail: string | undefined;
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      /* non-JSON error body — fall through with just the status */
+    }
+    throw new ApiError(detail ?? `Bundle verification failed (HTTP ${res.status}).`, res.status, detail);
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    throw new ApiError("Verification service returned a non-JSON response.");
+  }
+  return parseBundleTrustScore(json);
+}
+
+/**
+ * Build the absolute ws(s):// URL for the live-capture socket. In a split deploy the WebSocket cannot
+ * go through an HTTP-only proxy/rewrite, so when an absolute API base is configured we connect the
+ * socket DIRECTLY to that backend host; otherwise we use the current page origin (dev proxy / Nginx).
+ */
 export function liveVerifyUrl(): string {
+  if (API_BASE) {
+    return API_BASE.replace(/^http/, "ws") + ENDPOINTS.liveVerify;
+  }
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}${ENDPOINTS.liveVerify}`;
 }

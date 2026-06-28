@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from app.config import settings
 from app.contracts import AnalysisContext, LayerSignal, Mode
@@ -55,7 +55,7 @@ PROVENANCE_WEIGHT = 1.0
 _PDF_MAGIC = b"%PDF-"
 
 
-def _resolve_anchor_dir(override: Optional[str]) -> Path:
+def _resolve_anchor_dir(override: str | None) -> Path:
     """Resolve the trust-anchor directory.
 
     ``settings.trust_anchor_dir`` is repo-relative ("backend/verification/trust_anchors"); resolve
@@ -111,7 +111,7 @@ class PadesSignatureAnalyzer:
     mode = Mode.FILE
     order = 10
 
-    def __init__(self, anchor_dir: Optional[str] = None) -> None:
+    def __init__(self, anchor_dir: str | None = None) -> None:
         # Configurable so tests can pin a self-generated test CA as the trust root (§5 config-over-hardcode).
         self._anchor_dir_override = anchor_dir
 
@@ -280,10 +280,10 @@ class C2paProvenanceAnalyzer:
         b"RIFF": "image/webp",
     }
 
-    def __init__(self, anchor_dir: Optional[str] = None) -> None:
+    def __init__(self, anchor_dir: str | None = None) -> None:
         self._anchor_dir_override = anchor_dir
 
-    def _sniff_mime(self, data: bytes) -> Optional[str]:
+    def _sniff_mime(self, data: bytes) -> str | None:
         for magic, mime in self._IMAGE_MAGIC.items():
             if data[: len(magic)] == magic:
                 # WebP needs "WEBP" at offset 8 to disambiguate from other RIFF containers.

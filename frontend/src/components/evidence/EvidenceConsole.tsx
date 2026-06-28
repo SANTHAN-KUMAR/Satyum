@@ -57,7 +57,9 @@ export function EvidenceConsole({ trust, previewUrl, isPdf, fileName }: Evidence
           regions={pack.tamper_evidence_regions}
         />
         <div className="flex flex-col gap-4">
-          <SignalList signals={pack.signals} />
+          {/* Full LayerSignal list (not the lossy evidence_pack projection) so the per-signal
+              measurement breakdown — e.g. which arithmetic invariant broke — is available. */}
+          <SignalList signals={trust.signals} />
         </div>
       </div>
 

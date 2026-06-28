@@ -14,8 +14,8 @@ import cv2
 from app.config import settings
 from app.contracts import AnalysisContext, Mode, SignalStatus
 from capture.antispoof import (
-    SpecularGlareAnalyzer,
     SpectralMoireAnalyzer,
+    SpecularGlareAnalyzer,
     TemporalEntropyAnalyzer,
     loop_autocorrelation,
     moire_peak_prominence,

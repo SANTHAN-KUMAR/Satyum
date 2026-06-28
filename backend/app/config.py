@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # documents short-circuit before this gate. arithmetic_consistency = the primary in-document tamper
     # signal (file); active_challenge = the primary liveness anchor (camera).
     substantive_content_signals: frozenset[str] = frozenset(
-        {"arithmetic_consistency", "active_challenge"}
+        {"arithmetic_consistency", "active_challenge", "cross_document_consistency"}
     )
 
     # --- Per-layer scoring weights (relative; the engine normalises) -----------------------
@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     weight_font_layout: float = 0.10
     weight_copy_move: float = 0.10
     weight_phash_resubmission: float = 0.15
+    # Cross-document consistency graph (ADR-003 #3) — bundle-level; identity agreement across the
+    # statement/ID/deed. A strong signal when it fires. DEFAULT — calibrate on a real bundle corpus.
+    weight_cross_document: float = 0.50
+    # ID checksum (single-doc): an Aadhaar-format number that FAILS the UIDAI Verhoeff checksum is a
+    # forged number OR an OCR misread. We cannot distinguish the two on one number, so it lands in the
+    # REVIEW band (suspicion at the review ceiling) — a human checks, never an auto-reject. DEFAULT.
+    weight_id_checksum: float = 0.35
+    aadhaar_checksum_fail_suspicion: float = 0.40
     # Tier-3 capture votes (anti-spoof) — contributing votes, never hard gates (ADR-001/002)
     weight_antispoof_spectral: float = 0.15
     weight_antispoof_specular: float = 0.10
@@ -57,6 +65,17 @@ class Settings(BaseSettings):
 
     # --- File ingestion safety (CLAUDE.md §10) --------------------------------------------
     max_file_bytes: int = 25 * 1024 * 1024  # 25 MiB upload cap
+
+    # --- CORS (split-origin deploy: e.g. a Vercel frontend calling a Railway backend) -------
+    # Comma-separated allowed origins (exact, scheme+host[:port]). Empty -> no cross-origin allowed
+    # (same-origin only — correct when the frontend is served behind the same host or proxies /api).
+    # Set SATYUM_CORS_ALLOW_ORIGINS="https://your-app.vercel.app" for a split deploy.
+    cors_allow_origins: str = ""
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """The parsed, de-whitespaced allow-list (empty when no cross-origin access is configured)."""
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
 
     # --- PKI trust anchors (public roots shipped in-repo; never private keys) --------------
     trust_anchor_dir: str = "backend/verification/trust_anchors"

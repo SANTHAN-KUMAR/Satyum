@@ -1,6 +1,6 @@
 import { cn } from "@/lib/cn";
 
-export type IntakeTab = "upload" | "camera" | "sample";
+export type IntakeTab = "upload" | "bundle" | "camera" | "sample";
 
 interface ModeTabsProps {
   active: IntakeTab;
@@ -9,6 +9,7 @@ interface ModeTabsProps {
 
 const TABS: { id: IntakeTab; label: string; hint: string }[] = [
   { id: "upload", label: "File upload", hint: "Primary path · PDF / image" },
+  { id: "bundle", label: "Document bundle", hint: "Cross-document identity check" },
   { id: "camera", label: "Live capture", hint: "Tier 3 · in-person" },
   { id: "sample", label: "Sample view", hint: "Offline layout preview" },
 ];
