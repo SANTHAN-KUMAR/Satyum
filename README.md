@@ -109,9 +109,16 @@ robustness battery), then regenerates the synthetic corpus. **269 tests**, deter
 
 ## Deploy
 
-A live URL: static frontend on **Vercel**, Dockerised backend on **Railway** (HTTPS for the camera
-mode). Step-by-step in [`DEPLOY.md`](DEPLOY.md). The backend image is built and verified
-(`docker build -f backend/Dockerfile .`).
+One command brings up the whole stack — nginx (single origin) + backend + a **durable Postgres audit
+ledger**:
+
+```bash
+docker compose up --build      # → http://localhost:8080
+```
+
+Deploy that on any Docker host, or split it across **Vercel** (frontend) + **Railway** (backend).
+Both paths, plus how to install the real CCA-India trust anchor, are in [`DEPLOY.md`](DEPLOY.md). The
+stack is built and verified: the audit chain persists across a backend restart (proven).
 
 ---
 

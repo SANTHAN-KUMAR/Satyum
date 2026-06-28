@@ -82,7 +82,10 @@ class Settings(BaseSettings):
 
     # --- Persistence ----------------------------------------------------------------------
     database_url: str = "postgresql+psycopg://satyum:satyum@localhost:5432/satyum"
-    # Ephemeral session frames are NEVER persisted (privacy by design, §10).
+    # Opt-in durable audit ledger (Postgres). Default False -> in-memory (tests/local). Set
+    # SATYUM_DATABASE_ENABLED=true in a deploy with a reachable database_url to make the tamper-evident
+    # audit chain survive restarts (§10/§11). Ephemeral session FRAMES are NEVER persisted (§10).
+    database_enabled: bool = False
 
 
 settings = Settings()

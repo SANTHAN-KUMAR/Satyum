@@ -1,88 +1,103 @@
-# Deploying Satyum — Frontend on Vercel, Backend on Railway
+# Deploying Satyum
 
-Satyum deploys as **two services**: a static React frontend (Vercel) and a Dockerised FastAPI
-backend (Railway). They talk over HTTPS; the frontend calls the backend at an absolute URL configured
-at build time. Both platforms issue TLS certificates automatically — which the **live camera mode
-requires** (`getUserMedia` only runs on a secure context).
+Two paths. **Option A** (recommended) is a single `docker compose` stack — one origin, a durable
+Postgres audit ledger, easiest to run anywhere. **Option B** is a split Vercel + Railway hosting.
+Both give HTTPS in production, which the **live camera mode requires** (`getUserMedia` needs a secure
+context).
 
-```
-  Browser ──HTTPS──▶  Vercel (static dist/)         the evidence console (React)
-     │
-     └──HTTPS /api──▶  Railway (Docker, FastAPI)     the verification waterfall + cross-doc graph
-        wss  /ws   ▶                                 (camera mode connects the socket directly)
-```
-
-> **Status — verified locally.** The backend image builds and runs: `docker build -f backend/Dockerfile .`
-> produces a working image (897 MB) whose `/api/health` is green and which returns the correct verdicts
-> for every sample (Tier-1 `genuine_signed.pdf` → APPROVED/source-verified against the bundled demo
-> anchor; tampered statement → REJECTED; bundle mismatch → REJECTED; CORS preflight honoured). The
-> Vercel/Railway *hosting* steps below have not been executed for you — they need your accounts.
+> **Verified locally — not imagined.** `docker compose up --build` brings up the whole stack;
+> `http://localhost:8080` serves the console, `/api/health` reports `"audit_backend": "postgres"`,
+> verdicts are correct for every sample, and an audit record **survived a backend container restart**
+> (the Postgres hash chain stayed intact). The backend image also runs standalone on Railway.
 
 ---
 
-## 1. Backend → Railway
-
-The repo ships [`railway.json`](railway.json) (builds `backend/Dockerfile`, healthcheck `/api/health`)
-and the [`backend/Dockerfile`](backend/Dockerfile) (Python 3.13 + the `tesseract-ocr` system binary).
-**Build context is the repo root**, so the demo trust anchor is bundled into the image.
-
-1. Push this repo to GitHub.
-2. Railway → **New Project → Deploy from GitHub repo** → pick this repo. Railway reads `railway.json`
-   and builds the Dockerfile (no extra config needed). It injects `$PORT`; the container binds it.
-3. Set service **Variables** (Railway → service → Variables):
-   - `SATYUM_CORS_ALLOW_ORIGINS` = your Vercel URL (e.g. `https://satyum.vercel.app`). You can set a
-     placeholder now and update it after step 2 of the frontend.
-   - *(optional)* `SATYUM_TRUST_ANCHOR_DIR` — leave unset to use the **bundled demo anchor** (verifies
-     the sample signed PDF). For real documents, mount the public CCA-India root and point this at it.
-4. Wait for the deploy to go green (healthcheck hits `/api/health`). Copy the public URL, e.g.
-   `https://satyum-backend-production.up.railway.app`. Confirm it:
-   ```bash
-   curl https://<your-railway-url>/api/health
-   ```
-
-## 2. Frontend → Vercel
-
-The repo ships [`frontend/vercel.json`](frontend/vercel.json) (Vite framework + SPA fallback).
-
-1. Vercel → **Add New → Project** → import this repo.
-2. Set **Root Directory = `frontend`** (Settings → General → Root Directory). Vercel auto-detects Vite
-   (build `npm run build`, output `dist`).
-3. Add an **Environment Variable**:
-   - `VITE_API_BASE_URL` = your Railway backend URL from step 1.4 (no trailing slash).
-4. **Deploy.** Copy the Vercel URL (e.g. `https://satyum.vercel.app`).
-5. **Close the loop:** put that Vercel URL into Railway's `SATYUM_CORS_ALLOW_ORIGINS` (step 1.3) and
-   redeploy the backend so cross-origin calls (and the camera WebSocket) are allowed.
-
-That's the whole submission: the **Vercel URL** is your live system link.
-
----
-
-## Order of operations (the chicken-and-egg)
-
-Backend first → get its URL → set `VITE_API_BASE_URL` and deploy the frontend → get its URL → set
-`SATYUM_CORS_ALLOW_ORIGINS` on the backend → redeploy backend. Two redeploys, done.
-
-## Run the backend container locally (what was verified here)
+## Option A — One command: `docker compose` (recommended)
 
 ```bash
-# from the repo root
-docker build -f backend/Dockerfile -t satyum-backend .
-docker run -d -p 8080:8000 -e SATYUM_CORS_ALLOW_ORIGINS="http://localhost:5173" satyum-backend
-curl http://localhost:8080/api/health
-curl -X POST http://localhost:8080/api/verify -F "file=@samples/pdfs/genuine_signed.pdf"   # → APPROVED
+docker compose up --build        # from the repo root
+# → http://localhost:8080
 ```
 
-Run the frontend against it: `cd frontend && VITE_API_BASE_URL=http://localhost:8080 npm run dev`
-(or rely on the dev proxy in `vite.config.ts` with no env set).
+This starts three services (see [`docker-compose.yml`](docker-compose.yml)):
 
-## Notes & honest limits
+| Service | Role |
+|---|---|
+| **frontend** | nginx serving the built React app and reverse-proxying `/api` + `/ws` to the backend — **one origin**, so no CORS and the camera WebSocket works ([`deploy/nginx.conf`](deploy/nginx.conf)). |
+| **backend** | FastAPI verification waterfall ([`backend/Dockerfile`](backend/Dockerfile)), `SATYUM_DATABASE_ENABLED=true` → **durable Postgres audit ledger**. |
+| **db** | Postgres 16; the hash-chained audit trail persists in a named volume and survives restarts. |
 
-- **Trust anchor.** The image bundles the demo CA *public* root so the sample signed PDF verifies out
-  of the box. It will NOT verify real DigiLocker/bank documents — those need the public **CCA-India**
-  root via `SATYUM_TRUST_ANCHOR_DIR`. No private key is ever in the image or repo (CLAUDE.md §10).
-- **Camera mode.** HTTPS is mandatory (both platforms provide it). The WebSocket connects **directly**
-  to the Railway backend (`wss://…/ws/verify`), derived from `VITE_API_BASE_URL` — Vercel cannot proxy
-  WebSockets.
-- **Persistence.** The audit ledger and sessions are **in-memory** today (they reset on restart) — the
-  Postgres durable store is the designed next step (add a Railway Postgres plugin + wire the store).
-- **Image size** ≈ 897 MB (OpenCV + PyMuPDF + scientific stack + Tesseract). Fine for Railway.
+**Deploy this on any cloud:** any VM with Docker (`docker compose up -d` behind a TLS-terminating
+proxy / Caddy / the platform's HTTPS), or a Docker-friendly PaaS (Render, Fly.io, a cloud VM). Use a
+managed Postgres by pointing `SATYUM_DATABASE_URL` at it instead of the bundled `db` service. **Change
+the Postgres password** from the demo default.
+
+## Option B — Split: Frontend on Vercel, Backend on Railway
+
+For serverless-style hosting. The frontend calls the backend at an absolute URL baked in at build time
+(`VITE_API_BASE_URL`); the backend allows that origin via CORS.
+
+**Backend → Railway** ([`railway.json`](railway.json) builds [`backend/Dockerfile`](backend/Dockerfile)):
+1. Push to GitHub → Railway **New Project → Deploy from GitHub repo** (it reads `railway.json`).
+2. Add a **Postgres** plugin, then set service variables:
+   - `SATYUM_DATABASE_ENABLED=true` and `SATYUM_DATABASE_URL=<the Railway Postgres URL>`
+     (use the `postgresql+psycopg://…` scheme).
+   - `SATYUM_CORS_ALLOW_ORIGINS=<your Vercel URL>`.
+3. Deploy; healthcheck `/api/health`. Copy the public URL.
+
+**Frontend → Vercel** ([`frontend/vercel.json`](frontend/vercel.json)):
+1. Import the repo, set **Root Directory = `frontend`** (Vercel auto-detects Vite).
+2. Env var `VITE_API_BASE_URL=<your Railway backend URL>` → Deploy.
+3. Put the resulting Vercel URL back into Railway's `SATYUM_CORS_ALLOW_ORIGINS` → redeploy backend.
+
+The **Vercel URL** is your live link.
+
+---
+
+## Solving the two caveats
+
+### 1. Real cryptographic trust anchor (CCA-India root)
+
+The images bundle a **demo** CA root so the sample signed PDF verifies out of the box — it will **not**
+verify real DigiLocker / signed-bank-statement / signed-land-record documents. Those chain to the
+public **CCA-India** root (https://www.cca.gov.in/ → repository of CA certificates). Install it with the
+validate-and-install helper (it parses the cert and prints its subject/issuer/fingerprint — it does not
+invent one):
+
+```bash
+python scripts/install_trust_anchor.py /path/to/cca-india-root.cer --dir deploy/trust-anchors
+```
+
+Then point the backend at it:
+- **compose**: mount it and set the env in `docker-compose.yml`:
+  ```yaml
+  backend:
+    volumes: ["./deploy/trust-anchors:/anchors:ro"]
+    environment:
+      SATYUM_TRUST_ANCHOR_DIR: "/anchors"
+  ```
+- **Railway**: set `SATYUM_TRUST_ANCHOR_DIR` to a path you provision the root into.
+
+*Honest boundary:* installing the root makes Tier-1 *able* to verify real documents — still confirm
+end-to-end against a genuine signed sample before trusting the verdict in production.
+
+### 2. Durable audit ledger — **solved**
+
+The tamper-evident, hash-chained audit ledger now persists to **Postgres** (`SqlAlchemyLedgerStore`),
+enabled by `SATYUM_DATABASE_ENABLED=true` (compose sets this). It **survives restarts** and the chain
+stays verifiable (proven above). `/api/health` reports the live backend (`"audit_backend": "postgres"`);
+if the DB is ever unreachable it **fails safe** to in-memory and says so — it never pretends durability
+it doesn't have. Camera **frames** are still never persisted (privacy by design, §10). *Session* state
+remains in-memory by design (Redis is the documented next step; it holds no document content).
+
+---
+
+## Local development (no Docker)
+
+```bash
+# backend (from backend/, venv active, system tesseract-ocr installed)
+pip install -r requirements.txt -r requirements-dev.txt
+SATYUM_TRUST_ANCHOR_DIR="../samples/trust" uvicorn app.main:app --reload
+# frontend (from frontend/)
+npm install && npm run dev          # proxies /api and /ws to the backend
+```

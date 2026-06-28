@@ -63,6 +63,7 @@ class LedgerStore(Protocol):
     def append(self, record: AuditRecord) -> None: ...
     def all(self) -> list[AuditRecord]: ...
     def last_hash(self) -> str: ...
+    def count(self) -> int: ...
 
 
 @dataclass
@@ -78,6 +79,9 @@ class InMemoryLedgerStore:
     def last_hash(self) -> str:
         return self._records[-1].this_hash if self._records else GENESIS_HASH
 
+    def count(self) -> int:
+        return len(self._records)
+
 
 class AuditLedger:
     def __init__(self, store: LedgerStore | None = None) -> None:
@@ -85,7 +89,7 @@ class AuditLedger:
 
     def record(self, timestamp: str, payload: dict[str, Any]) -> AuditRecord:
         prev_hash = self._store.last_hash()
-        seq = len(self._store.all())
+        seq = self._store.count()  # next seq = current length (the chain is append-only)
         body = {"seq": seq, "timestamp": timestamp, "payload": payload, "prev_hash": prev_hash}
         this_hash = _record_hash(prev_hash, body)
         rec = AuditRecord(seq=seq, timestamp=timestamp, payload=payload,
@@ -100,8 +104,7 @@ class AuditLedger:
         internally-consistent chain alone cannot catch (see module docstring). ``last_hash`` is the
         genesis hash for an empty ledger.
         """
-        records = self._store.all()
-        return len(records), (records[-1].this_hash if records else GENESIS_HASH)
+        return self._store.count(), self._store.last_hash()
 
     def verify_chain(self, anchor: tuple[int, str] | None = None) -> tuple[bool, int | None]:
         """Re-derive every hash and confirm the chain is intact.
@@ -135,3 +138,72 @@ class AuditLedger:
 
     def records(self) -> list[AuditRecord]:
         return self._store.all()
+
+
+# --- Durable backend: a SQLAlchemy/Postgres-backed ledger store --------------------------------
+# The hash-chain logic above is storage-agnostic (it talks only to the LedgerStore Protocol), so a
+# durable store is a drop-in: the SAME tamper-evidence guarantees now survive a process restart.
+# SQLAlchemy keeps it portable — SQLite for tests, Postgres in production (CLAUDE.md §11).
+#
+# Concurrency note: seq + prev_hash are derived from the store's current state, so a single writer is
+# assumed (the deployment runs one backend worker). The seq PRIMARY KEY makes a concurrent double-write
+# fail loudly (IntegrityError) rather than silently fork the chain — fail-closed, not silent corruption.
+
+try:  # SQLAlchemy is an optional runtime dep; the in-memory store needs none of this.
+    from sqlalchemy import JSON as SA_JSON
+    from sqlalchemy import Integer, String, create_engine, func, select
+    from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+    class _Base(DeclarativeBase):
+        pass
+
+    class _AuditRow(_Base):
+        __tablename__ = "audit_records"
+        seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+        timestamp: Mapped[str] = mapped_column(String(40))
+        payload: Mapped[dict[str, Any]] = mapped_column(SA_JSON)
+        prev_hash: Mapped[str] = mapped_column(String(64))
+        this_hash: Mapped[str] = mapped_column(String(64))
+
+    class SqlAlchemyLedgerStore:
+        """A durable :class:`LedgerStore` over any SQLAlchemy-supported DB (Postgres in prod).
+
+        The table is created on init if absent (idempotent); Alembic owns schema evolution in a real
+        deployment. Payloads are stored as JSON and round-trip identically, so the re-derived hash in
+        :meth:`AuditLedger.verify_chain` still matches — tampering with a row in the DB breaks the chain.
+        """
+
+        def __init__(self, url: str) -> None:
+            # pool_pre_ping recovers cleanly if Postgres drops idle connections.
+            self._engine = create_engine(url, pool_pre_ping=True, future=True)
+            _Base.metadata.create_all(self._engine)
+
+        def append(self, record: AuditRecord) -> None:
+            with Session(self._engine) as s:
+                s.add(_AuditRow(seq=record.seq, timestamp=record.timestamp,
+                                payload=record.payload, prev_hash=record.prev_hash,
+                                this_hash=record.this_hash))
+                s.commit()
+
+        def all(self) -> list[AuditRecord]:
+            with Session(self._engine) as s:
+                rows = s.scalars(select(_AuditRow).order_by(_AuditRow.seq)).all()
+                return [
+                    AuditRecord(seq=r.seq, timestamp=r.timestamp, payload=r.payload,
+                                prev_hash=r.prev_hash, this_hash=r.this_hash)
+                    for r in rows
+                ]
+
+        def last_hash(self) -> str:
+            with Session(self._engine) as s:
+                row = s.scalars(
+                    select(_AuditRow).order_by(_AuditRow.seq.desc()).limit(1)
+                ).first()
+                return row.this_hash if row is not None else GENESIS_HASH
+
+        def count(self) -> int:
+            with Session(self._engine) as s:
+                return s.scalar(select(func.count()).select_from(_AuditRow)) or 0
+
+except ImportError:  # SQLAlchemy not installed -> only the in-memory store is available.
+    SqlAlchemyLedgerStore = None  # type: ignore[assignment,misc]

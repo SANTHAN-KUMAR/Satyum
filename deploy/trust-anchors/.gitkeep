@@ -1,0 +1,3 @@
+# Place a PUBLIC production trust anchor here (e.g. the CCA-India root) via
+# scripts/install_trust_anchor.py, then mount this dir and set SATYUM_TRUST_ANCHOR_DIR.
+# Certs in this dir are gitignored (operator-managed deployment config).

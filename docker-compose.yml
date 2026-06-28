@@ -1,0 +1,55 @@
+# Satyum — full single-origin stack. One command:  docker compose up --build
+# Browse http://localhost:8080  (nginx serves the app and proxies /api + /ws to the backend).
+#
+# Solves both deploy caveats:
+#   • durable Postgres audit ledger (the hash chain survives restarts) — SATYUM_DATABASE_ENABLED below
+#   • single origin (no CORS / no split host) — nginx routes everything
+# Deploy this same file on any VM (or a managed-Postgres host) for an easy cloud deployment.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: satyum
+      POSTGRES_PASSWORD: satyum          # CHANGE for a real deployment (use a secret / env file)
+      POSTGRES_DB: satyum
+    volumes:
+      - satyum-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U satyum"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      SATYUM_DATABASE_ENABLED: "true"
+      SATYUM_DATABASE_URL: "postgresql+psycopg://satyum:satyum@db:5432/satyum"
+      # Tier-1 uses the demo root bundled in the image (verifies the sample signed PDF). For real
+      # documents, mount the public CCA-India root and override SATYUM_TRUST_ANCHOR_DIR (see DEPLOY.md):
+      #   volumes: ["./deploy/trust-anchors:/anchors:ro"]
+      #   SATYUM_TRUST_ANCHOR_DIR: "/anchors"
+    depends_on:
+      db:
+        condition: service_healthy        # wait for Postgres so the durable ledger connects at startup
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else sys.exit(1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  satyum-pgdata:
