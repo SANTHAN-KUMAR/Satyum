@@ -13,8 +13,8 @@ once at app startup (``app.main``) and read off ``request.app.state`` here.
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 from fastapi import (
@@ -30,8 +30,9 @@ from fastapi import (
 )
 from starlette.concurrency import run_in_threadpool
 
+from app.bundle import verify_bundle
 from app.config import settings
-from app.contracts import AnalysisContext, Mode, TrustScore
+from app.contracts import AnalysisContext, BundleTrustScore, Mode, TrustScore
 from app.orchestrator import run_verification
 from verification.provenance import issuer_is_sourceable
 
@@ -58,7 +59,7 @@ _IMAGE_MAGICS = (
 
 
 def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _looks_like_document(data: bytes) -> bool:
@@ -75,9 +76,9 @@ def _looks_like_document(data: bytes) -> bool:
 @router.post("/api/verify", response_model=TrustScore)
 async def verify_file(
     request: Request,
-    file: UploadFile = File(...),
-    doc_type: Optional[str] = Form(default=None),
-    issuer_hint: Optional[str] = Form(default=None),
+    file: UploadFile = File(...),  # noqa: B008 — FastAPI's declarative default pattern
+    doc_type: str | None = Form(default=None),
+    issuer_hint: str | None = Form(default=None),
 ) -> TrustScore:
     """Verify an uploaded document and return the :class:`TrustScore` (incl. the evidence pack).
 
@@ -158,6 +159,95 @@ async def verify_file(
 
 
 # ---------------------------------------------------------------------------------------------
+# POST /api/verify-bundle — multi-document bundle intake + cross-document consistency (ADR-003 #3)
+# ---------------------------------------------------------------------------------------------
+
+# A loan application bundle is small (statement + ID + deed + a few more). Bound it defensively so a
+# caller cannot fan out unbounded parsing work in one request (§7/§10). DEFAULT — adjust to product.
+_MIN_BUNDLE_DOCS = 2
+_MAX_BUNDLE_DOCS = 12
+
+
+def _guard_upload(raw: bytes, content_type: str | None) -> None:
+    """Apply the same hostile-input guards as the single-file path; raise HTTPException on failure."""
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty file in bundle")
+    if len(raw) > settings.max_file_bytes:
+        raise HTTPException(status_code=413, detail=f"a file exceeds {settings.max_file_bytes} bytes")
+    if content_type is not None and content_type not in _ALLOWED_MIME:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"unsupported content-type {content_type!r} in bundle",
+        )
+    if not _looks_like_document(raw):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="a payload in the bundle is not a recognised PDF or image",
+        )
+
+
+@router.post("/api/verify-bundle", response_model=BundleTrustScore)
+async def verify_bundle_route(
+    request: Request,
+    files: list[UploadFile] = File(...),  # noqa: B008 — FastAPI's declarative default pattern
+    issuer_hint: str | None = Form(default=None),
+) -> BundleTrustScore:
+    """Verify an application BUNDLE: each document individually, then the cross-document graph.
+
+    The bundle is fail-closed (CLAUDE.md §4): never more trusting than its worst document, and a
+    cross-document identity mismatch (e.g. the name/PAN on the ID disagrees with the bank statement)
+    drives the bundle verdict down hard — that is identity fraud across the application.
+    """
+    if not (_MIN_BUNDLE_DOCS <= len(files) <= _MAX_BUNDLE_DOCS):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"a bundle needs {_MIN_BUNDLE_DOCS}-{_MAX_BUNDLE_DOCS} documents, got {len(files)}",
+        )
+
+    session = request.app.state.sessions
+    registry = request.app.state.registry
+    ledger = request.app.state.ledger
+    source_was_pullable = issuer_is_sourceable(issuer_hint)
+
+    labelled: list[tuple[str, AnalysisContext]] = []
+    for i, f in enumerate(files):
+        raw = await f.read()
+        _guard_upload(raw, f.content_type)
+        ctx = session.create(
+            intake_mode=Mode.FILE,
+            doc_type=None,
+            file_bytes=raw,
+            file_name=f.filename,
+            file_mime=f.content_type,
+            source_was_pullable=source_was_pullable,
+        )
+        labelled.append((f"doc{i + 1}:{f.filename or 'unnamed'}", ctx))
+
+    bundle_id = f"bundle-{secrets.token_urlsafe(8)}"
+    bound = log.bind(session_id=bundle_id, intake_mode="FILE-BUNDLE", document_count=len(files))
+    bound.info("verify.bundle.received", document_count=len(files))
+
+    try:
+        bundle: BundleTrustScore = await run_in_threadpool(
+            verify_bundle, labelled, registry, ledger, _iso_now(), bundle_session_id=bundle_id
+        )
+    finally:
+        # Release every document's bytes immediately after scoring (privacy by design, §10).
+        for _label, ctx in labelled:
+            session.mark_scored(ctx.session_id)
+            ctx.file_bytes = None
+
+    bound.info(
+        "verify.bundle.scored",
+        bundle_verdict=bundle.bundle_verdict.value,
+        bundle_score=bundle.bundle_score,
+        fail_closed=bundle.fail_closed,
+        cross_document_status=bundle.cross_document.status.value,
+    )
+    return bundle
+
+
+# ---------------------------------------------------------------------------------------------
 # GET /api/session/{id} — lightweight session status (no document content ever returned)
 # ---------------------------------------------------------------------------------------------
 
@@ -189,16 +279,32 @@ _MAX_FRAMES_BUFFERED = 30
 _MIN_FRAMES_TO_SCORE = 4  # matches ActiveChallengeAnalyzer._MIN_FRAMES
 
 # The active-challenge command space the server may randomly issue (anti-replay nonce). Verified by
-# the homography in ActiveChallengeAnalyzer against the tracked corner motion.
+# the homography in ActiveChallengeAnalyzer against the tracked corner motion. The COMMANDED
+# magnitude is randomized over a continuous range (not a single public constant): a single
+# pre-recorded tilt clip only satisfies commands within +/-challenge_homography_tol_deg of its own
+# tilt, so a wider random magnitude forces an attacker to hold a *library* of clips rather than one.
+# Range is bounded to angles a webcam can resolve while keeping the document in frame.
+# TODO(satyum): the strongest anti-replay is a multi-STEP randomized sequence (e.g. "tilt x, THEN
+# pan y") verified as an ordered chain of homographies — a single-tilt challenge has inherently
+# bounded entropy. Tracked for a follow-up; the single-tilt homography-consistency check still
+# defeats photo-of-screen replay today (see ActiveChallengeAnalyzer honest_bound).
 _CHALLENGE_AXES = ("x", "y")
-_CHALLENGE_MAGNITUDE_DEG = 20.0
+_CHALLENGE_MIN_DEG = 12.0
+_CHALLENGE_MAX_DEG = 30.0
+_CHALLENGE_STEP_DEG = 0.5
+
+
+def _random_magnitude_deg() -> float:
+    """A cryptographically-random commanded tilt magnitude in [MIN, MAX] at STEP resolution."""
+    steps = round((_CHALLENGE_MAX_DEG - _CHALLENGE_MIN_DEG) / _CHALLENGE_STEP_DEG)
+    return round(_CHALLENGE_MIN_DEG + _CHALLENGE_STEP_DEG * secrets.randbelow(steps + 1), 1)
 
 
 def _issue_challenge() -> dict[str, Any]:
     """Mint a server-randomized, just-in-time 3D challenge (a time-bounded anti-replay nonce, §10)."""
     return {
         "axis": secrets.choice(_CHALLENGE_AXES),
-        "magnitude_deg": _CHALLENGE_MAGNITUDE_DEG,
+        "magnitude_deg": _random_magnitude_deg(),
         "nonce": secrets.token_urlsafe(8),
     }
 

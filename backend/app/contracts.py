@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Optional, Protocol, runtime_checkable
+from enum import StrEnum
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, model_validator
 
 
-class Mode(str, Enum):
+class Mode(StrEnum):
     """The intake/medium a signal physically belongs to.
 
     The mode-tagging invariant (CLAUDE.md §1): a ``FILE`` analyzer may never run on a ``CAMERA``
@@ -31,13 +31,13 @@ class Mode(str, Enum):
     ANY = "ANY"
 
 
-class SignalStatus(str, Enum):
+class SignalStatus(StrEnum):
     VALID = "VALID"  # measured; contributes to the score
     NOT_EVALUATED = "NOT_EVALUATED"  # precondition unmet / honestly gated -> excluded from score
     ERROR = "ERROR"  # detector failed -> fail-closed, pushes the verdict toward REVIEW
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     APPROVED = "APPROVED"
     REVIEW = "REVIEW"
     REJECTED = "REJECTED"
@@ -62,7 +62,7 @@ class LayerSignal(BaseModel):
     layer: int  # 1..5 (1 capture anti-spoof, 2 identity, 3 forensics, 4 challenge, 5 risk)
     mode: Mode
     status: SignalStatus
-    suspicion: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    suspicion: float | None = Field(default=None, ge=0.0, le=1.0)
     weight: float = Field(default=0.0, ge=0.0)
     reason: str = ""
     evidence_regions: list[EvidenceRegion] = Field(default_factory=list)
@@ -70,7 +70,7 @@ class LayerSignal(BaseModel):
     producing_mode: Mode = Mode.ANY
 
     @model_validator(mode="after")
-    def _check_suspicion_consistency(self) -> "LayerSignal":
+    def _check_suspicion_consistency(self) -> LayerSignal:
         if self.status == SignalStatus.VALID and self.suspicion is None:
             raise ValueError(f"VALID signal '{self.name}' must carry a suspicion value")
         if self.status != SignalStatus.VALID and self.suspicion is not None:
@@ -91,9 +91,9 @@ class LayerSignal(BaseModel):
         weight: float,
         reason: str,
         *,
-        evidence_regions: Optional[list[EvidenceRegion]] = None,
-        measurements: Optional[dict[str, Any]] = None,
-    ) -> "LayerSignal":
+        evidence_regions: list[EvidenceRegion] | None = None,
+        measurements: dict[str, Any] | None = None,
+    ) -> LayerSignal:
         return cls(
             name=name,
             layer=layer,
@@ -110,7 +110,7 @@ class LayerSignal(BaseModel):
     @classmethod
     def not_evaluated(
         cls, name: str, layer: int, mode: Mode, reason: str, **measurements: Any
-    ) -> "LayerSignal":
+    ) -> LayerSignal:
         """An honest gate (CLAUDE.md §3.4): excluded from the score, shown as pending in the UI."""
         return cls(
             name=name,
@@ -123,7 +123,7 @@ class LayerSignal(BaseModel):
         )
 
     @classmethod
-    def error(cls, name: str, layer: int, mode: Mode, reason: str) -> "LayerSignal":
+    def error(cls, name: str, layer: int, mode: Mode, reason: str) -> LayerSignal:
         """A detector failure. Fail-closed: pushes the verdict toward REVIEW (never silent PASS)."""
         return cls(
             name=name,
@@ -149,7 +149,7 @@ class TrustScore(BaseModel):
 
     session_id: str
     intake_mode: Mode
-    doc_type: Optional[str] = None
+    doc_type: str | None = None
     provenance: Provenance = Field(default_factory=Provenance)
     trust_score: float
     verdict: Verdict
@@ -157,6 +157,32 @@ class TrustScore(BaseModel):
     signals: list[LayerSignal] = Field(default_factory=list)
     evidence_pack: dict[str, Any] = Field(default_factory=dict)
     fail_closed: bool = False
+
+
+class BundleDocument(BaseModel):
+    """One document's result within a bundle, plus the label used in the cross-document graph."""
+
+    label: str                  # e.g. "doc1:bank_statement.pdf"
+    trust: TrustScore
+
+
+class BundleTrustScore(BaseModel):
+    """The published verdict for a MULTI-document application bundle (ADR-003 #3).
+
+    Holds each document's individual :class:`TrustScore` plus the bundle-level
+    ``cross_document`` consistency signal and an overall fail-closed bundle verdict. The bundle is
+    never *more* trusting than its worst document, and a cross-document identity mismatch drives the
+    bundle score down hard (identity fraud across the application).
+    """
+
+    session_id: str
+    document_count: int
+    documents: list[BundleDocument] = Field(default_factory=list)
+    cross_document: LayerSignal
+    bundle_score: float
+    bundle_verdict: Verdict
+    fail_closed: bool = False
+    reasons: list[str] = Field(default_factory=list)
 
 
 @dataclass
@@ -170,11 +196,11 @@ class AnalysisContext:
 
     session_id: str
     intake_mode: Mode
-    doc_type: Optional[str] = None
+    doc_type: str | None = None
     # FILE intake
-    file_bytes: Optional[bytes] = None
-    file_name: Optional[str] = None
-    file_mime: Optional[str] = None
+    file_bytes: bytes | None = None
+    file_name: str | None = None
+    file_mime: str | None = None
     # CAMERA intake — a short rolling buffer of recent frames (BGR np.ndarray)
     frames: list[Any] = field(default_factory=list)
     # capability map: which issuer/source could have been verified for this doc (red-flag logic)

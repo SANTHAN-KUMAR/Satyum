@@ -19,7 +19,6 @@ from forensics.layout import (
     words_from_tesseract,
 )
 
-
 # --- synthetic OCR word geometry (the ctx.shared['ocr'] schema) ----------------------------------
 
 def _word(text: str, left: int, top: int, height: int, conf: float = 0.9,

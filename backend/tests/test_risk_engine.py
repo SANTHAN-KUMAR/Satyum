@@ -84,6 +84,17 @@ def test_not_evaluated_is_excluded_from_score():
     assert base.trust_score == with_ne.trust_score
 
 
+def test_verdict_band_agrees_with_displayed_score_at_threshold():
+    """Regression: verdict and the displayed gauge must derive from the SAME (rounded) score. A
+    suspicion that lands on a band edge with a float artefact (0.4 -> 0.4000000000000001 -> score
+    59.999999999999986) must NOT show a REJECTED verdict beside a 60.0 gauge the UI reads as REVIEW.
+    Would FAIL against the pre-fix engine (verdict from the unrounded score)."""
+    ts = aggregate("s", Mode.FILE, [_sig_valid("arithmetic_consistency", 0.4, weight=0.4)])
+    assert ts.trust_score == 60.0  # rounds to the band edge
+    # 60.0 sits in the REVIEW band (>= review_at), so the verdict MUST be REVIEW, not REJECTED.
+    assert ts.verdict == Verdict.REVIEW
+
+
 def test_pdf_only_red_flag_penalises_even_when_signature_verified():
     verified = LayerSignal.valid("signature", 1, Mode.FILE, 0.0, 0.0, "ok",
                                  measurements={"provenance": "verified", "method": "PAdES"})

@@ -1,8 +1,18 @@
 """Tamper-evident, hash-chained audit ledger (CLAUDE.md §10, the cyber-spine).
 
 Every verdict is appended as a record whose hash chains to the previous record's hash. Altering
-any past record (or its order) breaks the chain, which :func:`verify_chain` detects — giving the
-bank non-repudiation: a decision can be reconstructed AND proven un-altered.
+any past record's content, or reordering the recorded sequence, breaks the chain — which
+:func:`AuditLedger.verify_chain` detects. A decision can therefore be reconstructed and any
+in-place edit of a retained record proven.
+
+Honest bound (CLAUDE.md §3.5): a bare hash chain is only as trustworthy as its HEAD. On its own it
+cannot detect a wholesale re-forge (an attacker with write access who recomputes every hash forward)
+or a tail TRUNCATION (dropping the most recent records) — both yield a chain that is internally
+consistent. Closing that gap requires anchoring the head outside the ledger. :meth:`AuditLedger.head`
+exposes that anchor ``(count, last_hash)`` for a caller to persist/sign/timestamp; passing a
+previously-captured anchor back to :meth:`AuditLedger.verify_chain` then detects truncation and
+re-forge relative to it. Production should persist the anchor to durable, append-only storage (and,
+ideally, a signed external timestamp) — tracked as the path to full non-repudiation.
 
 Pure-Python (hashlib + json); the persistence backend is injected so the in-memory implementation
 is fully unit-testable. The ledger stores decision metadata and signal digests — NEVER document
@@ -83,10 +93,24 @@ class AuditLedger:
         self._store.append(rec)
         return rec
 
-    def verify_chain(self) -> tuple[bool, int | None]:
+    def head(self) -> tuple[int, str]:
+        """The chain anchor: ``(record_count, last_hash)``.
+
+        Persist/sign this out-of-band to later detect tail truncation or a wholesale re-forge that an
+        internally-consistent chain alone cannot catch (see module docstring). ``last_hash`` is the
+        genesis hash for an empty ledger.
+        """
+        records = self._store.all()
+        return len(records), (records[-1].this_hash if records else GENESIS_HASH)
+
+    def verify_chain(self, anchor: tuple[int, str] | None = None) -> tuple[bool, int | None]:
         """Re-derive every hash and confirm the chain is intact.
 
-        Returns ``(ok, first_broken_seq)``. ``first_broken_seq`` is ``None`` when the chain is sound.
+        Returns ``(ok, first_broken_seq)``; ``first_broken_seq`` is ``None`` when the chain is sound.
+        When ``anchor`` (a previously-captured :meth:`head`) is supplied, the chain must additionally
+        still contain at least ``anchor`` records and the record at that count must carry the anchored
+        hash — this is what catches a tail TRUNCATION or a forward RE-FORGE that an unanchored chain
+        cannot. A failed anchor check reports the seq at/after which the anchored history diverged.
         """
         prev_hash = GENESIS_HASH
         for rec in self._store.all():
@@ -96,6 +120,17 @@ class AuditLedger:
             if expected != rec.this_hash or rec.prev_hash != prev_hash:
                 return False, rec.seq
             prev_hash = rec.this_hash
+
+        if anchor is not None:
+            anchored_count, anchored_hash = anchor
+            records = self._store.all()
+            if len(records) < anchored_count:
+                # Records were dropped after the anchor was taken (truncation).
+                return False, len(records)
+            if anchored_count > 0 and records[anchored_count - 1].this_hash != anchored_hash:
+                # The anchored record's hash no longer matches (re-forge of the anchored history).
+                return False, anchored_count - 1
+
         return True, None
 
     def records(self) -> list[AuditRecord]:

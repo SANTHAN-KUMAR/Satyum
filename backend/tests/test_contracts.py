@@ -4,8 +4,9 @@ analyzers fabricating a pass or returning malformed signals."""
 from __future__ import annotations
 
 import pytest
-from app.contracts import LayerSignal, Mode, SignalStatus
 from pydantic import ValidationError
+
+from app.contracts import LayerSignal, Mode, SignalStatus
 
 
 def test_valid_requires_suspicion():

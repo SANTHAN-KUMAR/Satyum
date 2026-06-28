@@ -26,7 +26,7 @@ is honestly NOT_EVALUATED rather than mis-rectified.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -79,7 +79,7 @@ def _order_quad(pts: np.ndarray) -> np.ndarray:
     )
 
 
-def find_document_quad(bgr: np.ndarray) -> Optional[np.ndarray]:
+def find_document_quad(bgr: np.ndarray) -> np.ndarray | None:
     """Return the document's 4 corner points (float32, 4x2) or ``None`` if no quad is found.
 
     grayscale -> Gaussian blur -> Canny -> dilate -> external contours; the largest convex

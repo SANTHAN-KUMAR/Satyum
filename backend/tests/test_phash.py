@@ -12,6 +12,7 @@ logic is tested with no heavy dependency so it runs everywhere.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import numpy as np
@@ -76,6 +77,25 @@ def test_same_document_rescaled_blurred_matches_seeded_fraud():
     assert sig.measurements["matched_session_id"] == "prior-fraud-session-7"
     assert sig.measurements["hamming_distance"] <= settings.phash_hamming_threshold
     assert sig.evidence_regions, "a matched resubmission must carry an evidence region"
+
+
+def test_resubmission_signal_is_json_serialisable_native_int():
+    """Regression: the Hamming distance must be a NATIVE int so the matched LayerSignal survives
+    ``model_dump(mode="json")`` on the result-delivery path (app/routes/verify.py). A ``numpy.int64``
+    leak made a *detected* resubmission crash serialization with PydanticSerializationError instead of
+    surfacing the fraud — the worst possible failure for the one signal whose whole job is to flag a
+    reused forged document. Would FAIL (raise) against the pre-fix code."""
+    original = _document(seed=7)
+    store = InMemoryPhashStore()
+    store.add("prior-fraud-session-7", str(imagehash.phash(_to_pil(original), hash_size=16)), "ring-A")
+    az = PhashResubmissionAnalyzer(store=store)
+    sig = az.analyze(_ctx(_rescaled_then_blurred(original)))
+
+    assert sig.measurements["matched"] is True
+    dumped = sig.model_dump(mode="json")          # the exact serialization the API performs
+    json.dumps(dumped)                            # must not raise on a numpy scalar
+    hd = sig.measurements["hamming_distance"]
+    assert isinstance(hd, int) and not isinstance(hd, np.integer)  # native int, not numpy
 
 
 def test_unrelated_document_does_not_match():

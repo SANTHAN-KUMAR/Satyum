@@ -21,6 +21,7 @@ import re
 
 import pikepdf
 import pytest
+
 from app.contracts import AnalysisContext, Mode, SignalStatus
 from forensics.metadata import (
     PdfStructureAnalyzer,
@@ -29,7 +30,6 @@ from forensics.metadata import (
     parse_pdf_date,
     suspicion_from_findings,
 )
-
 
 # --- programmatic fixture builders ----------------------------------------------------------
 
@@ -136,7 +136,7 @@ def incremental_update_pdf(producer: str = "iText 7 (bank statement service)") -
         b"xref\n"
         b"0 1\n"
         b"0000000000 65535 f \n"
-        b"5 1\n" + ("%010d 00000 n \n" % appended_obj_offset).encode()
+        b"5 1\n" + f"{appended_obj_offset:010d} 00000 n \n".encode()
     )
     trailer = (
         b"trailer\n"
@@ -146,6 +146,53 @@ def incremental_update_pdf(producer: str = "iText 7 (bank statement service)") -
         b"%%EOF\n"
     )
     return body + xref + trailer
+
+
+def _append_generation(base: bytes, new_obj: bytes, obj_num: int) -> bytes:
+    """Append ONE real incremental-update generation carrying ``new_obj``, chaining /Prev to the
+    most-recent xref. Re-usable so a signed doc and a shadow attack can be built by composition."""
+    last = list(re.finditer(rb"startxref\s+(\d+)\s+%%EOF", base))[-1]
+    prev_xref_offset = int(last.group(1))
+    base_trailer = re.search(rb"trailer\s*<<(.+?)>>", base, re.S).group(1)
+    root_ref = re.search(rb"/Root\s+(\d+\s+\d+\s+R)", base_trailer).group(1)
+    info_match = re.search(rb"/Info\s+(\d+\s+\d+\s+R)", base_trailer)
+    info_clause = b" /Info " + info_match.group(1) if info_match else b""
+
+    appended_obj_offset = len(base)
+    body = base + new_obj
+    new_xref_offset = len(body)
+    xref = (
+        b"xref\n0 1\n0000000000 65535 f \n"
+        + f"{obj_num} 1\n".encode()
+        + f"{appended_obj_offset:010d} 00000 n \n".encode()
+    )
+    trailer = (
+        b"trailer\n<< /Size " + str(obj_num + 1).encode() + b" /Root " + root_ref + info_clause
+        + b" /Prev " + str(prev_xref_offset).encode() + b" >>\n"
+        b"startxref\n" + str(new_xref_offset).encode() + b"\n%%EOF\n"
+    )
+    return body + xref + trailer
+
+
+def signed_pdf_one_revision() -> bytes:
+    """A legitimately e-signed PDF: a clean base + ONE incremental update that IS the signature
+    (carries ``/ByteRange``). A PAdES signature is itself one incremental generation — a DigiLocker
+    doc / signed bank e-statement (the documents we target) must NOT be flagged for being signed."""
+    base = _build_pdf(
+        producer="iText 7 (bank statement service)",
+        creation_date="D:20240601090000+05'30'",
+        mod_date="D:20240601090000+05'30'",
+    )
+    sig_obj = b"5 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /ByteRange [0 0 0 0] >>\nendobj\n"
+    return _append_generation(base, sig_obj, 5)
+
+
+def shadow_attacked_signed_pdf() -> bytes:
+    """A shadow attack: sign (1 update, /ByteRange), THEN append a change (a 2nd update). Exactly one
+    POST-signing update remains — it must still be flagged (the discount is one signing revision, not
+    a blanket amnesty for signed files)."""
+    edit_obj = b"6 0 obj\n<< /Note (post-signing edit) >>\nendobj\n"
+    return _append_generation(signed_pdf_one_revision(), edit_obj, 6)
 
 
 def _ctx(raw: bytes | None, mime: str = "application/pdf") -> AnalysisContext:
@@ -227,6 +274,36 @@ def test_incremental_update_is_flagged_shadow_attack():
     assert sig.suspicion >= 0.4
     assert sig.measurements["incremental_updates"] >= 1
     assert sig.measurements["has_prev_xref"] is True
+
+
+def test_signed_pdf_signing_revision_is_not_flagged_false_positive():
+    """A legitimately e-signed PDF's signature is itself ONE incremental update — discounted, so it
+    must NOT raise the post-edit/shadow-attack penalty (DigiLocker / signed bank statements are our
+    primary targets). Discriminates against the UNSIGNED appended-edit case, which IS flagged."""
+    f = analyze_structure(signed_pdf_one_revision())
+    assert f.has_signature is True
+    assert f.incremental_updates == 1     # the raw structural count still sees the signing revision
+    assert f.post_signing_updates == 0    # but it is discounted -> no shadow-attack penalty
+    sig = PdfStructureAnalyzer().analyze(_ctx(signed_pdf_one_revision()))
+    assert sig.measurements["post_signing_updates"] == 0
+    assert sig.suspicion == 0.0  # cleanly-signed, coherent dates, legit producer -> no anomaly
+    # The unsigned appended-edit fixture (no /ByteRange) is NOT discounted -> still flagged.
+    unsigned = PdfStructureAnalyzer().analyze(_ctx(incremental_update_pdf()))
+    assert unsigned.measurements["post_signing_updates"] == 1
+    assert unsigned.suspicion is not None and unsigned.suspicion > 0.0
+
+
+def test_shadow_attack_on_signed_pdf_is_still_flagged():
+    """Must-fail: the discount is EXACTLY one signing revision. A shadow attack (sign, THEN append)
+    leaves a post-signing update that must still be flagged. Would FAIL if the discount swallowed it."""
+    f = analyze_structure(shadow_attacked_signed_pdf())
+    assert f.has_signature is True
+    assert f.incremental_updates == 2
+    assert f.post_signing_updates == 1
+    sig = PdfStructureAnalyzer().analyze(_ctx(shadow_attacked_signed_pdf()))
+    assert sig.status == SignalStatus.VALID
+    assert sig.suspicion >= 0.4
+    assert sig.measurements["post_signing_updates"] == 1
 
 
 def test_impossible_date_order_is_flagged():

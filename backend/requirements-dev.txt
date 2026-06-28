@@ -1,0 +1,10 @@
+# Satyum backend — DEV / TEST / QUALITY tooling (not installed in the production image).
+# Install on top of requirements.txt:  pip install -r requirements.txt -r requirements-dev.txt
+
+pytest==8.3.4
+hypothesis==6.123.2
+
+# Adversarial-regime extras (TESTING-STRATEGY.md) — install when running mutation/security passes:
+#   mutmut==3.2.0        # mutation testing (proves tests fail when the impl is mutated)
+#   bandit==1.8.0        # static security linter
+#   pip-audit==2.7.3     # dependency CVE audit

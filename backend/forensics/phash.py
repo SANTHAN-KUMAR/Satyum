@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -45,7 +45,7 @@ from app.contracts import (
 try:
     from PIL import Image
 
-    _PIL_ERROR: Optional[str] = None
+    _PIL_ERROR: str | None = None
 except ImportError as exc:  # pragma: no cover - exercised only on a broken install
     Image = None  # type: ignore[assignment]
     _PIL_ERROR = f"Pillow unavailable: {exc}"
@@ -53,12 +53,12 @@ except ImportError as exc:  # pragma: no cover - exercised only on a broken inst
 try:
     import imagehash
 
-    _IMAGEHASH_ERROR: Optional[str] = None
+    _IMAGEHASH_ERROR: str | None = None
 except ImportError as exc:  # pragma: no cover - exercised only on a broken install
     imagehash = None  # type: ignore[assignment]
     _IMAGEHASH_ERROR = f"imagehash unavailable: {exc}"
 
-_IMPORT_ERROR: Optional[str] = _PIL_ERROR or _IMAGEHASH_ERROR
+_IMPORT_ERROR: str | None = _PIL_ERROR or _IMAGEHASH_ERROR
 
 # pHash geometry. hash_size=16 -> 16x16 DCT-derived bits = a 256-bit hash, which is what the
 # settings.phash_hamming_threshold comment is calibrated against. Named, not magic (CLAUDE.md §5).
@@ -78,14 +78,20 @@ class PhashStore(Protocol):
 
     def add(self, session_id: str, hash_hex: str, label: str = "") -> None: ...
 
-    def nearest(self, hash_hex: str, max_distance: int) -> Optional[FraudMatch]:
+    def nearest(self, hash_hex: str, max_distance: int) -> FraudMatch | None:
         """Return the closest stored fraud hash within ``max_distance`` Hamming bits, or None."""
         ...
 
 
 def _hamming(hex_a: str, hex_b: str) -> int:
-    """Hamming distance between two pHash hex strings, via the real imagehash reconstruction."""
-    return imagehash.hex_to_hash(hex_a) - imagehash.hex_to_hash(hex_b)
+    """Hamming distance between two pHash hex strings, via the real imagehash reconstruction.
+
+    ``imagehash``'s subtraction yields a ``numpy.int64``; we cast to a native ``int`` so the value
+    is JSON-serialisable when it lands in ``LayerSignal.measurements`` (``model_dump(mode="json")``
+    on the result-delivery path raises ``PydanticSerializationError`` on a raw numpy scalar — and a
+    resubmission hit is exactly the case we must surface, not crash on).
+    """
+    return int(imagehash.hex_to_hash(hex_a) - imagehash.hex_to_hash(hex_b))
 
 
 class InMemoryPhashStore:
@@ -97,8 +103,8 @@ class InMemoryPhashStore:
     def add(self, session_id: str, hash_hex: str, label: str = "") -> None:
         self._entries.append((session_id, hash_hex, label))
 
-    def nearest(self, hash_hex: str, max_distance: int) -> Optional[FraudMatch]:
-        best: Optional[FraudMatch] = None
+    def nearest(self, hash_hex: str, max_distance: int) -> FraudMatch | None:
+        best: FraudMatch | None = None
         for session_id, stored_hex, label in self._entries:
             distance = _hamming(hash_hex, stored_hex)
             if distance <= max_distance and (best is None or distance < best.distance):
@@ -129,8 +135,8 @@ class SqlitePhashStore:
         )
         self._conn.commit()
 
-    def nearest(self, hash_hex: str, max_distance: int) -> Optional[FraudMatch]:
-        best: Optional[FraudMatch] = None
+    def nearest(self, hash_hex: str, max_distance: int) -> FraudMatch | None:
+        best: FraudMatch | None = None
         for session_id, stored_hex, label in self._conn.execute(
             "SELECT session_id, hash_hex, label FROM fraud_phash"
         ):
@@ -140,7 +146,7 @@ class SqlitePhashStore:
         return best
 
 
-def _to_pil(image: Any) -> Optional["Image.Image"]:
+def _to_pil(image: Any) -> Image.Image | None:
     """Coerce a rectified document image (np.ndarray BGR/gray or PIL) to a PIL grayscale image.
 
     pHash is colour-agnostic and we want robustness to the BGR/RGB ambiguity of an upstream
@@ -160,7 +166,7 @@ def _to_pil(image: Any) -> Optional["Image.Image"]:
     return None
 
 
-def compute_phash_hex(image: Any) -> Optional[str]:
+def compute_phash_hex(image: Any) -> str | None:
     """Compute the 256-bit pHash hex of a document image, or None if it can't be coerced."""
     pil = _to_pil(image)
     if pil is None:
@@ -180,7 +186,7 @@ class PhashResubmissionAnalyzer:
     mode = Mode.ANY  # a pHash is medium-agnostic: a file page or a rectified camera crop
     order = 40
 
-    def __init__(self, store: Optional[PhashStore] = None) -> None:
+    def __init__(self, store: PhashStore | None = None) -> None:
         self._store: PhashStore = store if store is not None else InMemoryPhashStore()
 
     def applicable(self, ctx: AnalysisContext) -> bool:

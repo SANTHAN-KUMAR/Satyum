@@ -20,7 +20,6 @@ from forensics.template import (
     match_template,
 )
 
-
 # --- programmatic template fixtures --------------------------------------------------------------
 
 def _bank_template(seed: int, header: str) -> np.ndarray:

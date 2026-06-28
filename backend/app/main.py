@@ -16,7 +16,9 @@ import logging
 
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings
 from app.registry_assembly import build_registry
 from app.routes.verify import router as verify_router
 from app.session import SessionManager
@@ -50,6 +52,17 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Provenance-first document-integrity verification for bank underwriting.",
     )
+
+    # --- CORS (only when explicitly configured for a split-origin deploy) --------------------
+    origins = settings.cors_origin_list
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,          # exact allow-list, never "*" (credentials-safe, §10)
+            allow_methods=["GET", "POST"],  # the only verbs the API serves
+            allow_headers=["Content-Type", "Accept"],
+        )
+        log.info("app.cors.enabled", origins=origins)
 
     # --- shared singletons (created once; read off app.state by the routes) -----------------
     app.state.ledger = AuditLedger()              # ONE tamper-evident audit ledger for the process

@@ -37,8 +37,8 @@ from __future__ import annotations
 import io
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import pikepdf
 
@@ -131,16 +131,20 @@ BBox = tuple[float, float, float, float]
 class StructureFindings:
     """Structured result of the metadata/structure analysis — typed, auditable, side-effect-free."""
 
-    producer: Optional[str] = None
-    creator: Optional[str] = None
+    producer: str | None = None
+    creator: str | None = None
     editing_tool_hits: list[str] = field(default_factory=list)
     legitimate_producer: bool = False
-    incremental_updates: int = 0  # appended generations beyond the original save
+    incremental_updates: int = 0  # appended generations beyond the original save (raw structural count)
+    has_signature: bool = False  # a PAdES/CMS signature (/ByteRange) is present in the bytes
+    post_signing_updates: int = 0  # incremental updates BEYOND the expected signing revision (the
+    # shadow-attack count): a legitimately e-signed PDF has 1 update (the signature) and 0 here; a
+    # shadow attack (sign, THEN append) has >=1 here. This — not the raw count — drives suspicion.
     has_prev_xref: bool = False
-    creation_date: Optional[datetime] = None
-    mod_date: Optional[datetime] = None
+    creation_date: datetime | None = None
+    mod_date: datetime | None = None
     impossible_date_order: bool = False
-    large_date_skew_days: Optional[float] = None
+    large_date_skew_days: float | None = None
     missing_metadata: bool = False
     reasons: list[str] = field(default_factory=list)
 
@@ -148,7 +152,7 @@ class StructureFindings:
 _PDF_DATE_RE = re.compile(r"D?:?\s*(\d{4})(\d{2})(\d{2})(\d{2})?(\d{2})?(\d{2})?")
 
 
-def parse_pdf_date(value: Any) -> Optional[datetime]:
+def parse_pdf_date(value: Any) -> datetime | None:
     """Parse a PDF date string (``D:YYYYMMDDHHmmSS+OH'mm'``) to a UTC datetime.
 
     We normalise to UTC ignoring the offset for *ordering* purposes (we compare create vs mod from
@@ -172,13 +176,13 @@ def parse_pdf_date(value: Any) -> Optional[datetime]:
             hour,
             minute,
             second,
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         )
     except ValueError:
         return None
 
 
-def _match_fingerprints(text: Optional[str], fingerprints: tuple[str, ...]) -> list[str]:
+def _match_fingerprints(text: str | None, fingerprints: tuple[str, ...]) -> list[str]:
     if not text:
         return []
     low = text.lower()
@@ -213,9 +217,19 @@ def analyze_structure(raw: bytes) -> StructureFindings:
     # 1) Incremental-update / xref-generation count — from the RAW intake bytes (see docstring).
     findings.incremental_updates = count_incremental_updates(raw)
     findings.has_prev_xref = b"/Prev" in raw
-    if findings.incremental_updates > 0:
+    # A PAdES/CMS signature is *itself* one incremental update (the signing revision), so a
+    # legitimately e-signed PDF (DigiLocker doc, signed bank e-statement — the documents we target)
+    # would otherwise be falsely flagged for being signed. Discount exactly one signing revision when
+    # a signature (/ByteRange) is present; a SHADOW ATTACK (sign, THEN append edits) still leaves
+    # >=1 post-signing update flagged. Anchor-trust is Tier-1's job; this only avoids the FP.
+    findings.has_signature = b"/ByteRange" in raw
+    findings.post_signing_updates = max(
+        0, findings.incremental_updates - (1 if findings.has_signature else 0)
+    )
+    if findings.post_signing_updates > 0:
+        signed_note = " after the signature" if findings.has_signature else " after the original save"
         findings.reasons.append(
-            f"{findings.incremental_updates} incremental update(s) appended after the original save "
+            f"{findings.post_signing_updates} incremental update(s) appended{signed_note} "
             "(post-edit / shadow-attack indicator)"
         )
 
@@ -281,10 +295,11 @@ def suspicion_from_findings(findings: StructureFindings) -> float:
     if findings.editing_tool_hits:
         suspicion += SUSPICION_EDITING_TOOL
 
-    if findings.incremental_updates > 0:
-        # First appended generation is the strong signal; further ones add diminishing weight.
+    if findings.post_signing_updates > 0:
+        # First post-signing generation is the strong signal; further ones add diminishing weight.
+        # (A lone signing revision on an e-signed PDF is NOT counted here — see analyze_structure.)
         suspicion += SUSPICION_PER_INCREMENTAL_UPDATE
-        suspicion += 0.10 * (findings.incremental_updates - 1)
+        suspicion += 0.10 * (findings.post_signing_updates - 1)
 
     if findings.impossible_date_order:
         suspicion += SUSPICION_IMPOSSIBLE_DATE_ORDER
@@ -355,6 +370,8 @@ class PdfStructureAnalyzer:
             "editing_tool_hits": findings.editing_tool_hits,
             "legitimate_producer": findings.legitimate_producer,
             "incremental_updates": findings.incremental_updates,
+            "has_signature": findings.has_signature,
+            "post_signing_updates": findings.post_signing_updates,
             "has_prev_xref": findings.has_prev_xref,
             "impossible_date_order": findings.impossible_date_order,
             "large_date_skew_days": findings.large_date_skew_days,

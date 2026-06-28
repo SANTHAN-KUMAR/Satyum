@@ -19,7 +19,6 @@ from forensics.copy_move import (
     detect_copy_move,
 )
 
-
 # --- programmatic fixtures (no external assets) --------------------------------------------------
 
 def _statement_like(seed: int = 11) -> np.ndarray:

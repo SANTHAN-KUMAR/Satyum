@@ -18,7 +18,6 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 from app.contracts import AnalysisContext, Mode
 
@@ -57,10 +56,10 @@ class SessionManager:
         self,
         intake_mode: Mode,
         *,
-        doc_type: Optional[str] = None,
-        file_bytes: Optional[bytes] = None,
-        file_name: Optional[str] = None,
-        file_mime: Optional[str] = None,
+        doc_type: str | None = None,
+        file_bytes: bytes | None = None,
+        file_name: str | None = None,
+        file_mime: str | None = None,
         source_was_pullable: bool = False,
     ) -> AnalysisContext:
         """Mint a new session with a cryptographically-random id and return its context."""
@@ -80,7 +79,7 @@ class SessionManager:
             self._sessions[session_id] = _Entry(ctx=ctx, created_at=now, last_seen=now)
         return ctx
 
-    def get(self, session_id: str) -> Optional[AnalysisContext]:
+    def get(self, session_id: str) -> AnalysisContext | None:
         """Return the live context, or ``None`` if unknown or expired (lazily reaped)."""
         now = self._now()
         with self._lock:

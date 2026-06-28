@@ -41,7 +41,9 @@ def build_evidence_pack(trust: TrustScore) -> dict[str, Any]:
 
     reasons: list[str] = []
     if trust.provenance.tampered:
-        reasons.append(f"Cryptographic signature present but INVALID ({trust.provenance.method}) — tampering.")
+        reasons.append(
+            f"Cryptographic signature present but INVALID ({trust.provenance.method}) — tampering."
+        )
     elif trust.provenance.verified:
         reasons.append(f"Source verified cryptographically via {trust.provenance.method}.")
     for s in flagged:

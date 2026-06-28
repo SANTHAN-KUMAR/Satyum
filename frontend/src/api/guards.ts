@@ -8,8 +8,10 @@
  */
 
 import type {
+  BundleTrustScore,
   EvidencePack,
   EvidencePackSignal,
+  LayerSignal,
   Mode,
   Provenance,
   ServerMessage,
@@ -93,6 +95,53 @@ export function parseTrustScore(v: unknown): TrustScore {
     throw new Error("Malformed verification response: signals is not an array.");
   }
   return v as unknown as TrustScore;
+}
+
+/** A LayerSignal carries measurements + regions; validate the load-bearing fields, not every key. */
+function isLayerSignal(v: unknown): v is LayerSignal {
+  return (
+    isObject(v) &&
+    typeof v.name === "string" &&
+    typeof v.layer === "number" &&
+    MODES.has(v.producing_mode as string) &&
+    STATUSES.has(v.status as string) &&
+    (v.suspicion === null || typeof v.suspicion === "number") &&
+    typeof v.weight === "number" &&
+    typeof v.reason === "string" &&
+    isObject(v.measurements)
+  );
+}
+
+/**
+ * Validate a POST /api/verify-bundle response into a typed BundleTrustScore, or throw clearly. Each
+ * per-document `trust` is validated as a full TrustScore; the cross-document signal as a LayerSignal.
+ */
+export function parseBundleTrustScore(v: unknown): BundleTrustScore {
+  if (!isObject(v)) {
+    throw new Error("Malformed bundle response: expected a JSON object.");
+  }
+  if (typeof v.document_count !== "number" || !Array.isArray(v.documents)) {
+    throw new Error("Malformed bundle response: documents/document_count missing.");
+  }
+  for (const d of v.documents) {
+    if (!isObject(d) || typeof d.label !== "string") {
+      throw new Error("Malformed bundle response: a document entry is missing its label.");
+    }
+    parseTrustScore(d.trust); // throws on a malformed per-document TrustScore
+  }
+  if (!isLayerSignal(v.cross_document)) {
+    throw new Error("Malformed bundle response: cross_document signal is missing or malformed.");
+  }
+  if (typeof v.bundle_score !== "number") {
+    throw new Error("Malformed bundle response: bundle_score is not a number.");
+  }
+  if (!VERDICTS.has(v.bundle_verdict as string)) {
+    throw new Error(`Malformed bundle response: invalid bundle_verdict "${String(v.bundle_verdict)}".`);
+  }
+  if (typeof v.fail_closed !== "boolean" || !Array.isArray(v.reasons)) {
+    throw new Error("Malformed bundle response: fail_closed/reasons missing.");
+  }
+  return v as unknown as BundleTrustScore;
 }
 
 /** Validate a single inbound WebSocket frame (already JSON-parsed) into a typed ServerMessage. */
