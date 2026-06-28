@@ -28,11 +28,10 @@ numpy==2.5.0
 Pillow==12.2.0
 ImageHash==4.3.2
 
-# --- Persistence (NOT YET WIRED into the runtime path) ---
-# The audit ledger and sessions run IN-MEMORY today (risk/audit.py InMemoryLedgerStore,
-# app/session.py). The Postgres/SQLAlchemy durable store is the designed next step (config carries a
-# database_url, but no runtime code imports SQLAlchemy yet) — so these are intentionally NOT runtime
-# deps. Add them here when the durable store lands:
-#   SQLAlchemy==2.0.36
-#   psycopg[binary]==3.2.3
-#   alembic==1.14.0
+# --- Persistence: durable tamper-evident audit ledger (opt-in via SATYUM_DATABASE_ENABLED) ---
+# risk/audit.py SqlAlchemyLedgerStore persists the hash-chained audit trail so it survives restarts
+# (§10/§11). Default is still in-memory; set SATYUM_DATABASE_ENABLED=true + a reachable SATYUM_DATABASE_URL
+# (the docker-compose stack does this). Camera FRAMES are never persisted (§10).
+SQLAlchemy==2.0.36
+psycopg[binary]==3.2.3
+# alembic==1.14.0   # schema migrations (the store create_all()s its one table on startup for now)

@@ -22,7 +22,7 @@ from app.config import settings
 from app.registry_assembly import build_registry
 from app.routes.verify import router as verify_router
 from app.session import SessionManager
-from risk.audit import AuditLedger
+from risk.audit import AuditLedger, SqlAlchemyLedgerStore
 
 
 def _configure_logging() -> None:
@@ -40,6 +40,26 @@ def _configure_logging() -> None:
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+
+def _build_ledger(log: structlog.stdlib.BoundLogger) -> tuple[AuditLedger, str]:
+    """Build the audit ledger. Durable (Postgres) when SATYUM_DATABASE_ENABLED and the DB is reachable;
+    otherwise the in-memory store. If a durable store is requested but unreachable we FAIL SAFE to
+    in-memory and surface it honestly via /api/health — never crash startup, never silently pretend the
+    audit trail is durable when it is not (§3.5/§4)."""
+    if not settings.database_enabled:
+        return AuditLedger(), "in-memory"
+    if SqlAlchemyLedgerStore is None:
+        log.error("app.audit.sqlalchemy_missing_failsafe_to_memory")
+        return AuditLedger(), "in-memory (sqlalchemy not installed)"
+    try:
+        store = SqlAlchemyLedgerStore(settings.database_url)
+        store.count()  # force a real connection now so failure is caught at startup, not first write
+        log.info("app.audit.durable", backend="postgres")
+        return AuditLedger(store=store), "postgres"
+    except Exception as exc:  # noqa: BLE001 — any DB failure must degrade safe, not crash the service
+        log.error("app.audit.db_unreachable_failsafe_to_memory", error=repr(exc))
+        return AuditLedger(), "in-memory (database unreachable)"
 
 
 def create_app() -> FastAPI:
@@ -65,7 +85,7 @@ def create_app() -> FastAPI:
         log.info("app.cors.enabled", origins=origins)
 
     # --- shared singletons (created once; read off app.state by the routes) -----------------
-    app.state.ledger = AuditLedger()              # ONE tamper-evident audit ledger for the process
+    app.state.ledger, app.state.audit_backend = _build_ledger(log)  # tamper-evident audit ledger
     app.state.registry = build_registry()         # every analyzer, wired in dependency order
     app.state.sessions = SessionManager()         # ephemeral, in-memory; frames never persisted (§10)
 
@@ -78,6 +98,7 @@ def create_app() -> FastAPI:
             "status": "ok",
             "analyzers": len(app.state.registry.all()),
             "active_sessions": app.state.sessions.active_count(),
+            "audit_backend": app.state.audit_backend,   # "postgres" | "in-memory[ …]" — honest, not assumed
             "audit_chain_intact": ok,
             "audit_first_broken_seq": broken,
         }

@@ -30,6 +30,10 @@ htmlcov/
 *private*.pem
 *.pfx
 *.p12
+# Operator-provided production trust anchors (e.g. the real CCA-India root) are deployment config,
+# not source — keep them out of git. The dir is kept via .gitkeep for the compose mount.
+deploy/trust-anchors/*
+!deploy/trust-anchors/.gitkeep
 
 # --- Node / frontend (frontend/.gitignore also covers these; belt-and-suspenders) ---
 node_modules/

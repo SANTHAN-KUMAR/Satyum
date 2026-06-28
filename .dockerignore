@@ -9,10 +9,9 @@
 node_modules
 frontend/node_modules
 frontend/dist
-# The backend image does not serve the frontend (Vercel does); exclude its source.
-frontend/src
-frontend/public
-# Dev-only sample binaries are not needed in the image (only samples/trust/ is COPYed explicitly).
+# NOTE: frontend/src and /public are intentionally NOT excluded — the frontend image (built from this
+# same repo-root context) needs them. The backend image never COPYs frontend/, so it stays lean anyway.
+# Dev-only sample binaries are not needed in the images (only samples/trust/ is COPYed explicitly).
 samples/pdfs
 samples/statements
 samples/bundle_consistent
