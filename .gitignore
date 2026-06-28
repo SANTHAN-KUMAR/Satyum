@@ -1,0 +1,43 @@
+# --- Local agent / editor config (never shared) ---
+.claude/settings.local.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# --- Secrets & environment (CLAUDE.md §10 — never commit secrets/keys) ---
+.env
+.env.*
+!.env.example
+# Private keys only. PUBLIC trust roots (*.pem/*.crt/*.cer/*.der) DO ship in-repo per §10 —
+# the demo CA *private* key lives outside the repo (scratchpad), never here.
+*.key
+*_key.pem
+*private*.pem
+*.pfx
+*.p12
+
+# --- Node / frontend (frontend/.gitignore also covers these; belt-and-suspenders) ---
+node_modules/
+*.tsbuildinfo
+.vite/
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.log
+*.swp

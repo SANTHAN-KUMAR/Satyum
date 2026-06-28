@@ -3,6 +3,13 @@
 > **SuRaksha Cyber Hackathon 2.0 | Canara Bank**
 > Layer-by-Layer Technical Deep Dive
 
+> ⚠️ **SUPERSEDED (2026-06-27).** Describes the original *camera-only* design. Current authoritative
+> architecture is **[ADR-001](ADR-001-dual-mode-and-signal-validity.md)** (dual-mode intake, mode-bound
+> detectors, structural/semantic Layer 3). Several signals here are **cut or relabeled `NOT_EVALUATED`**
+> on the camera path (ELA, steganalysis, JPEG copy-move, AI-gen, neural GradCAM, micro-tremor,
+> hologram/microprint) and one is **cut entirely** (micro-expression). Use the surviving techniques
+> (rectify/OCR/arithmetic-consistency/copy-move/pHash/active-challenge/anti-spoof) as reference only.
+
 ---
 
 ## Directory Structure

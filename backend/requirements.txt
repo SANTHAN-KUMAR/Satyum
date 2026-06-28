@@ -1,0 +1,39 @@
+# Satyum backend — pinned for reproducibility. Split by what each group is for.
+
+# --- Core API + contracts (light; the pure-Python core needs only these) ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-multipart==0.0.20
+structlog==24.4.0
+websockets==14.1
+
+# --- Tier 1: cryptographic provenance (PAdES / C2PA) ---
+pyhanko==0.25.3
+pyhanko-certvalidator==0.26.5
+cryptography==44.0.0
+asn1crypto==1.5.1
+c2pa-python==0.36.0          # new Reader/Context/Settings API (verified against this pin)
+
+# --- Tier 2: document forensics / OCR / CV ---
+pikepdf==9.4.2
+pymupdf==1.25.1
+pytesseract==0.3.13          # requires the system `tesseract` binary (present: 5.3.4)
+opencv-python-headless==4.10.0.84
+scikit-image==0.25.0
+numpy==2.2.1
+Pillow==11.0.0
+ImageHash==4.3.1
+
+# --- Persistence ---
+SQLAlchemy==2.0.36
+psycopg[binary]==3.2.3
+alembic==1.14.0
+
+# --- Test / quality (adversarial regime, TESTING-STRATEGY.md) ---
+pytest==8.3.4
+hypothesis==6.123.2
+mutmut==3.2.0
+bandit==1.8.0
+pip-audit==2.7.3
