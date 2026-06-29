@@ -4,24 +4,36 @@ If a verifiable source existed for a document (the issuer is AA-enabled / signs 
 is DigiLocker-issuable) but the applicant submitted only an *unsigned* PDF, that avoidance is itself
 a risk signal — mirroring how lenders treat a missing sourceable record.
 
-The real signature verification (PAdES/C2PA) is implemented separately (verification/signature.py,
-built in the analyzer workflow); this module holds the deterministic capability map + red-flag rule,
-which need no heavy deps and are unit-tested directly.
+The real signature verification (PAdES/C2PA) lives in ``verification/signature.py``. This module holds
+the deterministic capability map + the red-flag rule. The issuer that drives the flag is derived **from
+the document itself** (PDF metadata + page-1 text), NOT from a client-supplied hint — an attacker who
+simply omits the hint must not be able to disable the flag (ADR-004 Layer-1 hardening). The client hint
+survives only as a soft fallback for media with no readable text layer (e.g. an image statement).
 """
 
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass
 
 from app.config import settings
 from app.contracts import AnalysisContext, LayerSignal, Mode
 
+logger = logging.getLogger(__name__)
+
+# v2 provenance result contract (ADR-004 Layer 1): the avoidance state surfaced to the decision brain.
+PROV_RESULT_SOURCE_AVOIDED = "SOURCE_AVOIDED"
+
+# How many characters of page-1 text to scan for an issuer name (the masthead/header is at the top).
+_TEXT_SCAN_LIMIT = 4000
+
 
 @dataclass(frozen=True)
 class IssuerCapability:
     issuer: str
-    aa_enabled: bool          # reachable via RBI Account Aggregator
-    signs_statements: bool    # issues CCA-signed e-statements
+    aa_enabled: bool  # reachable via RBI Account Aggregator
+    signs_statements: bool  # issues CCA-signed e-statements
     digilocker_issuable: bool
 
 
@@ -38,6 +50,19 @@ SOURCE_CAPABILITY: dict[str, IssuerCapability] = {
     "kotak": IssuerCapability("Kotak Mahindra Bank", True, True, True),
 }
 
+# Multi-word issuer patterns (lowercased) -> capability key. Checked as substrings first because they
+# are specific; the short keys above are then checked only as WHOLE words to avoid false positives
+# (e.g. "axis" inside another token). Calibrated against the registry, expandable per corpus.
+_ISSUER_PATTERNS: dict[str, str] = {
+    "state bank of india": "sbi",
+    "hdfc bank": "hdfc",
+    "icici bank": "icici",
+    "axis bank": "axis",
+    "canara bank": "canara",
+    "punjab national bank": "pnb",
+    "kotak mahindra": "kotak",
+}
+
 
 def issuer_is_sourceable(issuer_key: str | None) -> bool:
     if not issuer_key:
@@ -46,11 +71,70 @@ def issuer_is_sourceable(issuer_key: str | None) -> bool:
     return bool(cap and (cap.aa_enabled or cap.signs_statements or cap.digilocker_issuable))
 
 
+def detect_issuer(text: str) -> str | None:
+    """Return the capability key of the first recognised issuer in ``text``, or ``None``.
+
+    Specific multi-word names win over short keys; short keys match only as whole words. Pure string
+    logic — deterministic and directly unit-tested.
+    """
+    t = re.sub(r"\s+", " ", text.lower())
+    for pattern, key in _ISSUER_PATTERNS.items():
+        if pattern in t:
+            return key
+    for key in SOURCE_CAPABILITY:
+        if re.search(rf"\b{re.escape(key)}\b", t):
+            return key
+    return None
+
+
+def _is_pdf(data: bytes) -> bool:
+    head = data[:1024].lstrip(b"\x00\r\n\t ")
+    return head.startswith(b"%PDF-")
+
+
+def extract_issuer_from_document(file_bytes: bytes | None) -> tuple[str | None, str]:
+    """Derive the issuing institution from the PDF itself (metadata + page-1 text).
+
+    Returns ``(issuer_key | None, evidence)``. Defensive: a missing/garbled/non-PDF input yields
+    ``(None, reason)`` and never raises — the red flag then has no document basis (and may fall back
+    to an upstream capability hint). This replaces trusting a client-supplied issuer field, which a
+    forger could simply omit to dodge the flag.
+    """
+    if not file_bytes:
+        return None, "no file bytes"
+    if not _is_pdf(file_bytes):
+        return None, "not a pdf (no text layer to derive issuer from)"
+    try:
+        import pymupdf  # PyMuPDF; lazy import so a missing dep degrades, never crashes the pipeline
+    except ImportError:
+        return None, "pdf text extraction unavailable (pymupdf missing)"
+    try:
+        doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    except Exception as exc:  # noqa: BLE001 — a malformed PDF yields no issuer, never raises
+        logger.info("issuer extraction: unparsable pdf: %r", exc)
+        return None, "unparsable pdf"
+    try:
+        meta_values = [str(v) for v in (doc.metadata or {}).values() if v]
+        page_text = doc.load_page(0).get_text("text")[:_TEXT_SCAN_LIMIT] if doc.page_count else ""
+    except Exception as exc:  # noqa: BLE001 — extraction failure -> no issuer, never a crash
+        logger.info("issuer extraction: text/metadata read failed: %r", exc)
+        meta_values, page_text = [], ""
+    finally:
+        doc.close()
+
+    key = detect_issuer(" ".join(meta_values) + "\n" + page_text)
+    if key is None:
+        return None, "no recognized issuer in metadata or page-1 text"
+    return key, "document"
+
+
 class PdfOnlyRedFlagAnalyzer:
     """Raises a risk flag when a sourceable issuer's document arrived as an unsigned upload.
 
-    Runs after the signature analyzer (which sets ``ctx.shared['provenance_verified']``); registered
-    after it so the orchestrator's insertion order guarantees ordering.
+    The issuer is derived from the document (``extract_issuer_from_document``); the client capability
+    hint (``ctx.source_was_pullable``) is only a fallback for media with no readable text layer. Runs
+    after the signature analyzer (which sets ``ctx.shared['provenance_verified']``); registered after
+    it so the orchestrator's insertion order guarantees ordering.
     """
 
     name = "pdf_only_red_flag"
@@ -62,21 +146,48 @@ class PdfOnlyRedFlagAnalyzer:
         return ctx.intake_mode == Mode.FILE
 
     def analyze(self, ctx: AnalysisContext) -> LayerSignal:
-        if not ctx.source_was_pullable:
+        # Derive the issuer FROM THE DOCUMENT first; never let a (possibly absent) client hint be the
+        # trigger. The hint may only ADD coverage when the document yields nothing.
+        issuer_key, evidence = extract_issuer_from_document(ctx.file_bytes)
+        if issuer_key is not None:
+            sourceable = issuer_is_sourceable(issuer_key)
+        else:
+            sourceable = ctx.source_was_pullable
+            evidence = "issuer-capability hint" if sourceable else evidence
+
+        if not sourceable:
             return LayerSignal.not_evaluated(
-                self.name, self.layer, self.mode,
-                "issuer not known to be source-verifiable — no basis for the red flag",
+                self.name,
+                self.layer,
+                self.mode,
+                "no source-verifiable issuer recognised in the document — no basis for the red flag",
             )
         if ctx.shared.get("provenance_verified"):
-            # they DID provide a cryptographically verifiable document — no avoidance, no flag
+            # They DID provide a cryptographically verifiable document — no avoidance, no flag.
             return LayerSignal.not_evaluated(
-                self.name, self.layer, self.mode, "verifiable source provided (no avoidance)",
+                self.name,
+                self.layer,
+                self.mode,
+                "verifiable source provided (no avoidance)",
             )
-        # sourceable issuer, but only an unsigned PDF was submitted -> avoidance signal
+
+        issuer_label = (
+            SOURCE_CAPABILITY[issuer_key].issuer if issuer_key in SOURCE_CAPABILITY else "the issuer"
+        )
         return LayerSignal.valid(
-            self.name, self.layer, self.mode,
+            self.name,
+            self.layer,
+            self.mode,
             suspicion=settings.red_flag_pdf_only_suspicion,
             weight=settings.red_flag_pdf_only_weight,
-            reason="sourceable issuer but unsigned PDF submitted — a verifiable pull was avoided",
-            measurements={"red_flag": "pdf_only_when_pullable"},
+            reason=(
+                f"{issuer_label} is source-verifiable but only an unsigned PDF was submitted — "
+                "a verifiable pull/signature was avoided"
+            ),
+            measurements={
+                "red_flag": "pdf_only_when_pullable",
+                "issuer": issuer_key,
+                "issuer_evidence": evidence,
+                "provenance_result": PROV_RESULT_SOURCE_AVOIDED,
+            },
         )

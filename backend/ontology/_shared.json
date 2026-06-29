@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0",
+  "kind": "shared",
+  "description": "Shared foundation for the domain rulebooks (financial.json, land_title.json, legal_contract.json). The deterministic Layer-4/5/6 engine loads this once and merges it with each domain file. Value types define validation + extraction/match semantics; check_kinds is the FINITE, auditable catalog of deterministic primitives each rule dispatches to (no arbitrary expression evaluation). Governed by CLAUDE.md and ADR-004 (the model reads, deterministic rules decide).",
+
+  "status_vocabulary": {
+    "PASS": "invariant holds over the present claims",
+    "FAIL": "invariant violated; localizes the offending field(s) + bbox as tamper evidence",
+    "UNKNOWN": "claims present but indeterminate (ambiguous parse)",
+    "NOT_APPLICABLE": "rule does not apply to this document type",
+    "NOT_EVALUATED": "required claims absent / not cross-read / below confidence gate — honest pending, never a pass"
+  },
+
+  "extraction_classes": {
+    "cross_read_critical": "a numeric whose VLM read MUST be confirmed by the deterministic OCR cross-read (ADR-004 section 5); disagreement -> the claim is NOT_EVALUATED. These are the numbers a forger edits.",
+    "validated": "a deterministic validator decides correctness (regex / checksum / calendar)",
+    "fuzzy": "compared with normalization + Levenshtein/rapidfuzz, never bit-exact",
+    "verbatim": "exact string after normalization"
+  },
+
+  "value_types": {
+    "Money": {
+      "base": "decimal", "scale_max": 2, "currency_default": "INR",
+      "extraction_class": "cross_read_critical",
+      "match": { "kind": "numeric_tolerance", "tolerance_ref": "arithmetic_abs_tolerance" }
+    },
+    "Count": { "base": "integer", "min": 0, "extraction_class": "cross_read_critical", "match": { "kind": "exact" } },
+    "Integer": { "base": "integer", "extraction_class": "cross_read_critical", "match": { "kind": "exact" } },
+    "Percentage": { "base": "decimal", "min": 0, "max": 100, "extraction_class": "cross_read_critical", "match": { "kind": "numeric_tolerance", "tolerance": 0.01 } },
+    "Area": { "base": "quantity", "unit_enum": "AreaUnit", "canonical_unit": "sqm", "extraction_class": "cross_read_critical", "match": { "kind": "numeric_tolerance", "tolerance": 0.5, "normalize_unit": true } },
+    "Duration": { "base": "quantity", "unit_enum": "TimeUnit", "canonical_unit": "month", "extraction_class": "cross_read_critical", "match": { "kind": "exact_normalized" } },
+    "Date": { "base": "date", "input_formats": ["DD/MM/YYYY", "DD-MM-YYYY", "YYYY-MM-DD", "DD Mon YYYY", "DD.MM.YYYY"], "extraction_class": "validated", "match": { "kind": "exact_day" } },
+    "PersonName": { "base": "string", "normalize": ["unicode_nfkc", "lower", "collapse_space", "strip_titles"], "extraction_class": "fuzzy", "match": { "kind": "fuzzy_surname_anchored", "min_ratio": 0.85 } },
+    "OrgName": { "base": "string", "normalize": ["unicode_nfkc", "lower", "collapse_space", "strip_legal_suffix"], "extraction_class": "fuzzy", "match": { "kind": "fuzzy", "min_ratio": 0.88 } },
+    "Address": { "base": "structured", "fields": ["line", "city", "state", "pin"], "pin_regex": "^[1-9][0-9]{5}$", "extraction_class": "fuzzy", "match": { "kind": "token_set_plus_pin", "min_ratio": 0.80 } },
+    "PAN": { "base": "string", "regex": "^[A-Z]{5}[0-9]{4}[A-Z]$", "structure": { "entity_type_char_index": 3, "surname_initial_char_index": 4 }, "extraction_class": "validated", "match": { "kind": "exact_ci" } },
+    "Aadhaar": { "base": "string", "regex": "^[2-9][0-9]{11}$", "checksum": "verhoeff", "extraction_class": "validated", "match": { "kind": "exact" } },
+    "IFSC": { "base": "string", "regex": "^[A-Z]{4}0[A-Z0-9]{6}$", "extraction_class": "validated", "match": { "kind": "exact_ci" } },
+    "AccountNumber": { "base": "string", "regex": "^[0-9Xx*]{6,18}$", "extraction_class": "verbatim", "match": { "kind": "exact_allow_masked" } },
+    "Mobile": { "base": "string", "regex": "^[6-9][0-9]{9}$", "extraction_class": "validated", "match": { "kind": "exact" } },
+    "RegistrationNumber": { "base": "string", "extraction_class": "verbatim", "match": { "kind": "exact_normalized" } },
+    "SurveyNumber": { "base": "string", "regex": "^[0-9]+(/[0-9A-Za-z-]+)*$", "extraction_class": "verbatim", "match": { "kind": "exact_normalized" } },
+    "ParcelId": { "base": "string", "note": "ULPIN / Khata / Khasra token; exact format is state-scoped (see coverage gates).", "extraction_class": "verbatim", "match": { "kind": "exact_normalized" } },
+    "Boolean": { "base": "boolean", "extraction_class": "validated", "match": { "kind": "exact" } },
+    "Text": { "base": "string", "extraction_class": "fuzzy", "match": { "kind": "fuzzy", "min_ratio": 0.90 } }
+  },
+
+  "unit_conversions": {
+    "AreaUnit": {
+      "canonical": "sqm",
+      "factors_to_canonical": {
+        "sqm": 1, "sqft": 0.092903, "sqyd": 0.836127, "acre": 4046.8564, "hectare": 10000,
+        "guntha": 101.17, "cent": 40.4686, "ground": 222.967,
+        "bigha": null, "ankanam": null, "kanal": 505.857, "marla": 25.2929
+      },
+      "calibration": "bigha and ankanam vary by state/region; left null and treated as NOT_EVALUATED until a state-specific value is configured (honest gate, CLAUDE.md 3.4)."
+    },
+    "TimeUnit": { "canonical": "month", "factors_to_canonical": { "month": 1, "year": 12, "day": 0.0328767, "week": 0.230137 } }
+  },
+
+  "severity_bands": {
+    "_calibration": "DEFAULT — needs calibration on a labeled corpus (CLAUDE.md 5). Values are suspicion in [0,1] for the risk engine; review_only never reaches APPROVE/REJECT on its own.",
+    "hard_tamper": 0.90,
+    "title_defect": 0.85,
+    "hard_mismatch": 0.92,
+    "structural": 0.60,
+    "soft": 0.45,
+    "review_only": 0.40
+  },
+
+  "identity_anchors": ["name", "pan", "aadhaar", "dob", "address", "mobile", "account_number", "ifsc", "employer", "property_id", "registration_number"],
+
+  "field_ref_grammar": {
+    "description": "How a rule binds to claim-graph values. A ref is one of the forms below; the engine resolves it against the claim graph for the document/bundle under evaluation.",
+    "single": { "entity": "<EntityName>", "field": "<field>" },
+    "filtered": { "entity": "<EntityName>", "field": "<field>", "where": { "<field>": "<value>" } },
+    "series": { "entity": "<OrderedEntityName>", "field": "<field>", "series": true, "comment": "resolves to the ordered list of that field across all instances (e.g. every Transaction.credit)" },
+    "constant": { "const": 0 }
+  },
+
+  "check_kinds": {
+    "regex_validate": { "params": ["field", "regex_ref"], "semantics": "field matches the value-type regex", "default_fail": "FAIL" },
+    "checksum_validate": { "params": ["field", "algorithm"], "algorithms": ["verhoeff"], "semantics": "field passes the named checksum", "default_fail": "FAIL" },
+    "equation": { "params": ["lhs", "rhs", "tolerance_ref"], "lhs_shape": "list of {coef, ref} summed", "semantics": "sum(coef_i * value(ref_i)) == value(rhs) within tolerance", "default_fail": "FAIL" },
+    "linear_balance": { "params": ["sequence", "anchor", "credit", "debit", "printed", "reanchor_on_printed", "tolerance_ref"], "semantics": "running = anchor; for each row: expected = running + credit - debit; if printed present, compare expected to printed (FAIL+localize on mismatch) then re-anchor running on printed (so one edit breaks locally, not cascading) else running = expected", "default_fail": "FAIL", "implements": "F1 (matches backend/forensics/arithmetic.py)" },
+    "sum_equals": { "params": ["sequence_field", "equals", "tolerance_ref"], "semantics": "sum over the series == value(equals) within tolerance", "default_fail": "FAIL" },
+    "comparison": { "params": ["left", "op", "right"], "ops": ["<", "<=", ">", ">=", "==", "!="], "semantics": "value(left) op value(right)", "default_fail": "FAIL" },
+    "range": { "params": ["field", "min", "max"], "semantics": "min <= value(field) <= max", "default_fail": "FAIL" },
+    "date_order": { "params": ["left", "op", "right"], "ops": ["<", "<=", ">", ">=", "=="], "semantics": "date(left) op date(right)", "default_fail": "FAIL" },
+    "date_within": { "params": ["date", "after", "max_offset"], "max_offset_shape": "{value, unit}", "semantics": "date in [after, after + max_offset]", "default_fail": "FAIL" },
+    "date_offset_equals": { "params": ["start", "offset", "end", "tolerance_days"], "semantics": "start + offset(Duration) == end within tolerance_days", "default_fail": "FAIL" },
+    "sequence_monotonic": { "params": ["sequence_field", "strict"], "semantics": "the series is non-decreasing (strict=false) or strictly increasing (strict=true)", "default_fail": "FAIL" },
+    "words_equal_figures": { "params": ["words_field", "figures_field", "tolerance_ref"], "semantics": "parse Indian/English number-words in words_field to a Decimal and compare to figures_field within tolerance", "default_fail": "FAIL" },
+    "fuzzy_match": { "params": ["left", "right", "min_ratio", "anchor"], "semantics": "normalized similarity(left, right) >= min_ratio; anchor='surname' anchors on the last token", "default_fail": "FAIL" },
+    "all_equal_fuzzy": { "params": ["field_set", "min_ratio"], "semantics": "every value in field_set pairwise matches >= min_ratio (e.g. a party name across recital/body/signature/schedule)", "default_fail": "FAIL" },
+    "set_subset": { "params": ["subset", "superset", "key"], "semantics": "every item in subset (by key) exists in superset", "default_fail": "FAIL" },
+    "references_resolve": { "params": ["ref_field", "target_entity", "target_key"], "semantics": "every reference token in ref_field resolves to an existing target_entity by target_key", "default_fail": "FAIL" },
+    "presence_count": { "params": ["target", "min", "exact"], "semantics": "count of present instances of target meets min (and exact if given)", "default_fail": "FAIL" },
+    "sequence_complete": { "params": ["field", "start"], "semantics": "the integer field forms a complete run start..N with no gaps and no duplicates", "default_fail": "FAIL" },
+    "quantity_equal": { "params": ["left", "right", "dimension", "tolerance"], "semantics": "value(left) == value(right) after normalizing both to the canonical unit of dimension", "default_fail": "FAIL" },
+    "consistency_across": { "params": ["field", "doc_types", "match"], "semantics": "the same logical field agrees across the named document types present in the bundle (within-bundle corroboration)", "default_fail": "FAIL" },
+    "table_lookup": { "params": ["table", "key", "into"], "semantics": "resolve a rate/value from a named external table keyed by fields; used as an input to another check. If the table is not configured -> the dependent rule is NOT_EVALUATED (honest gate).", "default_fail": "NOT_EVALUATED" },
+    "formula": { "params": ["function", "inputs", "observed", "tolerance"], "functions": { "amortize_emi": "EMI = P*r*(1+r)^n / ((1+r)^n - 1), r = annual_rate/12/100, n = term_months" }, "semantics": "compute function(inputs) and compare to observed within tolerance; NOT_EVALUATED if any input missing", "default_fail": "FAIL" }
+  },
+
+  "result_contract": {
+    "description": "Each evaluated rule yields one record the orchestrator wraps into a LayerSignal (ADR-004). Fields:",
+    "rule_id": "string",
+    "status": "one of status_vocabulary",
+    "suspicion": "0..1 (from severity_bands) when status==FAIL, else null",
+    "evidence": "list of {entity, field, bbox, expected, printed} for FAIL localization",
+    "reason": "human-readable, templated from the rule's reason string",
+    "rule_pack_version": "recorded in the audit ledger (CLAUDE.md 10)"
+  }
+}

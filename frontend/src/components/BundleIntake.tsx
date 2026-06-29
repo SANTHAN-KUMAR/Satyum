@@ -1,3 +1,4 @@
+import { AlertTriangle, Files, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { ApiError } from "@/api/client";
 import { useVerifyBundle } from "@/hooks/useVerifyBundle";
@@ -123,12 +124,12 @@ export function BundleIntake() {
         />
         <span
           className={cn(
-            "flex h-12 w-12 items-center justify-center rounded-full border text-xl transition-colors",
+            "flex h-12 w-12 items-center justify-center rounded-full border transition-colors",
             isDragging ? "border-accent text-accent" : "border-hairline text-slate-400 group-hover:text-accent",
           )}
           aria-hidden="true"
         >
-          ⧉
+          <Files size={22} strokeWidth={1.75} />
         </span>
         <div>
           <p className="text-sm font-semibold text-slate-100">
@@ -168,9 +169,9 @@ export function BundleIntake() {
                   type="button"
                   onClick={() => removeAt(i)}
                   aria-label={`Remove ${f.name} from the bundle`}
-                  className="shrink-0 rounded px-1.5 text-slate-500 hover:text-verdict-rejected"
+                  className="shrink-0 rounded p-1 text-slate-500 hover:text-verdict-rejected"
                 >
-                  ✕
+                  <X size={15} aria-hidden="true" />
                 </button>
               </li>
             ))}
@@ -202,7 +203,7 @@ export function BundleIntake() {
           tone="error"
           title="That file can't be added"
           detail={clientError}
-          icon={<span className="text-2xl">⚠</span>}
+          icon={<AlertTriangle size={26} className="text-verdict-rejected" />}
         />
       )}
 
@@ -226,7 +227,7 @@ export function BundleIntake() {
               )}
             </>
           }
-          icon={<span className="text-2xl">⚠</span>}
+          icon={<AlertTriangle size={26} className="text-verdict-rejected" />}
           action={
             <button
               type="button"

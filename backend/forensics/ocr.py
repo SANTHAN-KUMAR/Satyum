@@ -483,6 +483,12 @@ def ocr_word_dicts(words: list[_Word]) -> list[dict[str, Any]]:
     return out
 
 
+# Identity documents (AADHAAR, PAN_CARD) have no transaction tables; running a transaction-table
+# parser on them produces a meaningless NOT_EVALUATED and wastes time. Defined locally to avoid a
+# circular import with intake.sufficiency (which imports is_pdf from this module).
+_IDENTITY_DOC_TYPES: frozenset[str] = frozenset({"AADHAAR", "PAN_CARD"})
+
+
 class DocumentParseAnalyzer:
     """Tier-2 bridge: OCR a statement into ``ctx.shared['statement']`` for the arithmetic engine.
 
@@ -497,6 +503,9 @@ class DocumentParseAnalyzer:
     order = 5  # runs before the arithmetic engine in the layer-3 waterfall
 
     def applicable(self, ctx: AnalysisContext) -> bool:
+        doc_type = (ctx.doc_type or "").upper()
+        if doc_type in _IDENTITY_DOC_TYPES:
+            return False  # no transaction table in identity documents
         return ctx.file_bytes is not None or bool(ctx.frames) or "rectified" in ctx.shared
 
     def analyze(self, ctx: AnalysisContext) -> LayerSignal:

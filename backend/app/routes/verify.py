@@ -12,7 +12,10 @@ once at app startup (``app.main``) and read off ``request.app.state`` here.
 
 from __future__ import annotations
 
+import base64
+import json
 import secrets
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -82,8 +85,9 @@ async def verify_file(
 ) -> TrustScore:
     """Verify an uploaded document and return the :class:`TrustScore` (incl. the evidence pack).
 
-    Pipeline: size/type guard → build a FILE-mode :class:`AnalysisContext` (with the issuer-capability
-    red-flag input derived from ``issuer_hint``) → run the verification waterfall → audit → respond.
+    Pipeline: size/type guard → build a FILE-mode :class:`AnalysisContext` → run the verification
+    waterfall → audit → respond. The PDF-only red flag derives the issuer from the *document* itself;
+    ``issuer_hint`` is only a soft fallback for media with no readable text layer (ADR-004 Layer 1).
     """
     raw = await file.read()
 
@@ -118,7 +122,8 @@ async def verify_file(
     registry = request.app.state.registry
     ledger = request.app.state.ledger
 
-    # Real source-capability red-flag input: was a verifiable source pullable for this issuer? (D3)
+    # Soft fallback for the PDF-only red flag — the analyzer derives the issuer from the document
+    # itself; this client hint only adds coverage for media with no readable text layer (ADR-002 D3).
     source_was_pullable = issuer_is_sourceable(issuer_hint)
 
     ctx: AnalysisContext = session.create(
@@ -277,6 +282,15 @@ async def get_session(request: Request, session_id: str) -> dict[str, Any]:
 # memory unboundedly — drop the oldest, never queue without limit.
 _MAX_FRAMES_BUFFERED = 30
 _MIN_FRAMES_TO_SCORE = 4  # matches ActiveChallengeAnalyzer._MIN_FRAMES
+# Auto-score once the buffer holds a full short motion sequence (~5 s at the 300 ms client cadence).
+# The client streams continuously and never has to ask for a score — the server decides when it has
+# captured enough of the commanded motion to verify the active challenge. A client MAY also send
+# ``{"type": "score"}`` to trigger early. DEFAULT — needs calibration against real capture timing.
+_FRAMES_TO_AUTO_SCORE = 16
+# Validity window of the issued challenge nonce, surfaced to the user as a live countdown. This is
+# cosmetic relative to the frame-count trigger above; sized to comfortably cover camera start-up plus
+# the motion window so a cooperating user is never shown "expired" mid-capture.
+_CHALLENGE_TTL_MS = 10_000
 
 # The active-challenge command space the server may randomly issue (anti-replay nonce). Verified by
 # the homography in ActiveChallengeAnalyzer against the tracked corner motion. The COMMANDED
@@ -293,6 +307,22 @@ _CHALLENGE_MIN_DEG = 12.0
 _CHALLENGE_MAX_DEG = 30.0
 _CHALLENGE_STEP_DEG = 0.5
 
+# Axis -> the human directional commands the homography axis check accepts. 'x' is a tilt about the
+# horizontal axis (top/bottom edge toward the camera); 'y' is about the vertical axis (left/right
+# edge toward the camera). NOTE: ActiveChallengeAnalyzer verifies the AXIS and the MAGNITUDE, not the
+# sign — decomposeHomographyMat's rotation sign is ambiguous, so the direction is a human-facing
+# instruction for clarity, NOT a separately verified factor. We never claim otherwise (CLAUDE.md §3).
+_AXIS_KINDS: dict[str, tuple[str, ...]] = {
+    "x": ("tilt-up", "tilt-down"),
+    "y": ("tilt-left", "tilt-right"),
+}
+_KIND_INSTRUCTION = {
+    "tilt-up": "Tilt the document's top edge toward the camera",
+    "tilt-down": "Tilt the document's bottom edge toward the camera",
+    "tilt-left": "Tilt the document's left edge toward the camera",
+    "tilt-right": "Tilt the document's right edge toward the camera",
+}
+
 
 def _random_magnitude_deg() -> float:
     """A cryptographically-random commanded tilt magnitude in [MIN, MAX] at STEP resolution."""
@@ -301,7 +331,12 @@ def _random_magnitude_deg() -> float:
 
 
 def _issue_challenge() -> dict[str, Any]:
-    """Mint a server-randomized, just-in-time 3D challenge (a time-bounded anti-replay nonce, §10)."""
+    """Mint the AUTHORITATIVE server-randomized 3D challenge (a time-bounded anti-replay nonce, §10).
+
+    Stored at ``ctx.shared['challenge']`` and verified by :class:`ActiveChallengeAnalyzer` — an axis,
+    a randomized magnitude, and a random nonce. The client-facing wire message (kind / instruction /
+    countdown) is projected from this by :func:`_challenge_message`.
+    """
     return {
         "axis": secrets.choice(_CHALLENGE_AXES),
         "magnitude_deg": _random_magnitude_deg(),
@@ -309,8 +344,60 @@ def _issue_challenge() -> dict[str, Any]:
     }
 
 
-def _decode_frame(payload: bytes):
-    """Decode a binary frame (JPEG/PNG bytes) into a BGR ndarray, or ``None`` if undecodable.
+def _challenge_message(challenge: dict[str, Any]) -> dict[str, Any]:
+    """Project the authoritative challenge into the client wire message (frontend ServerChallengeMessage).
+
+    Carries a human ``kind`` / ``instruction`` plus the exact ``axis`` / ``magnitude_deg`` the
+    cooperating client must physically perform. These are not secret from a legitimate client — the
+    anti-replay strength is that the command is issued just-in-time and verified against the tracked
+    document motion, not that its parameters are hidden. ``challenge_id`` is the nonce; the
+    ``expires_at_ms`` deadline drives the on-screen countdown. Kept field-for-field in lockstep with
+    ``frontend/src/api/types.ts :: ServerChallengeMessage`` (CLAUDE.md §11).
+    """
+    axis = challenge["axis"]
+    magnitude = float(challenge["magnitude_deg"])
+    kind = secrets.choice(_AXIS_KINDS[axis])
+    return {
+        "type": "challenge",
+        "challenge_id": challenge["nonce"],
+        "kind": kind,
+        "instruction": f"{_KIND_INSTRUCTION[kind]} about {magnitude:.0f}°, and hold steady",
+        "axis": axis,
+        "magnitude_deg": round(magnitude, 1),
+        "expires_at_ms": int(time.time() * 1000) + _CHALLENGE_TTL_MS,
+    }
+
+
+def _live_status_message(frames_buffered: int) -> dict[str, Any]:
+    """An HONEST live per-tier status row (frontend ServerTierStatusMessage).
+
+    This is NOT a verdict: it is a single ``NOT_EVALUATED`` capture-progress signal reflecting the
+    real buffer state, so the console shows the pipeline is alive without ever fabricating a pass/fail
+    on a frame that has not been scored (CLAUDE.md §3.1/§9). The real per-signal verdicts arrive only
+    in the final ``result`` message.
+    """
+    return {
+        "type": "tier_status",
+        "signals": [
+            {
+                "name": "live_capture",
+                "layer": 3,
+                "producing_mode": "CAMERA",
+                "status": "NOT_EVALUATED",
+                "suspicion": None,
+                "weight": 0.0,
+                "reason": (
+                    f"Capturing the commanded motion — {frames_buffered}/{_FRAMES_TO_AUTO_SCORE} "
+                    f"frames buffered. Perform and hold the tilt; the active challenge is verified "
+                    f"once enough motion is captured."
+                ),
+            }
+        ],
+    }
+
+
+def _decode_jpeg_frame(payload: bytes):
+    """Decode raw JPEG/PNG bytes into a BGR ndarray, or ``None`` if undecodable.
 
     Frames live only in memory and are never written to disk or logs (§10).
     """
@@ -320,20 +407,32 @@ def _decode_frame(payload: bytes):
     arr = np.frombuffer(payload, dtype=np.uint8)
     if arr.size == 0:
         return None
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # -> BGR ndarray or None
-    return img
+    return cv2.imdecode(arr, cv2.IMREAD_COLOR)  # -> BGR ndarray or None
+
+
+def _decode_base64_frame(b64: str):
+    """Decode a base64 JPEG (the client's ``frame.jpeg_base64``; data-URL prefix already stripped)."""
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except (ValueError, TypeError):
+        return None
+    return _decode_jpeg_frame(raw)
 
 
 @router.websocket("/ws/verify")
 async def verify_camera(websocket: WebSocket) -> None:
-    """Live camera verification: accept frames, issue a random 3D challenge, stream tier status.
+    """Live camera verification: issue a random 3D challenge, accept streamed frames, score, return.
 
-    Protocol:
-      * server → client on connect: ``{"type": "challenge", "challenge": {...}, "session_id": ...}``
-      * client → server: binary messages, each a JPEG/PNG-encoded frame
-      * client → server text ``"score"`` (or buffer full): run camera-mode verification
-      * server → client: ``{"type": "status", ...}`` per accepted frame, then
-        ``{"type": "result", "trust_score": {...}}`` with the final :class:`TrustScore`.
+    Protocol — kept field-for-field in lockstep with ``frontend/src/api/types.ts`` (CLAUDE.md §11):
+      * server → client on connect: ``{"type": "challenge", challenge_id, kind, instruction, axis,
+        magnitude_deg, expires_at_ms}``
+      * client → server: ``{"type": "hello", doc_type}`` then ``{"type": "frame", jpeg_base64, ...}``
+        per ~300 ms window (JSON; ``jpeg_base64`` carries no data-URL prefix). Raw binary frames are
+        also accepted as a fallback.
+      * server → client: ``{"type": "tier_status", signals: [...]}`` per accepted frame (honest
+        capture progress), then ``{"type": "result", trust_score: {...}}`` once enough of the
+        commanded motion is captured (or on a client ``{"type": "score"}``).
+      * server → client on failure: ``{"type": "error", message}``.
 
     Frames are dropped from the session the instant scoring completes (§10).
     """
@@ -351,57 +450,64 @@ async def verify_camera(websocket: WebSocket) -> None:
     bound = log.bind(session_id=ctx.session_id, intake_mode="CAMERA")
     bound.info("verify.ws.connected", challenge_axis=challenge["axis"], nonce=challenge["nonce"])
 
-    await websocket.send_json(
-        {"type": "challenge", "session_id": ctx.session_id, "challenge": challenge}
-    )
+    await websocket.send_json(_challenge_message(challenge))
 
     scored = False
     try:
         while True:
             message = await websocket.receive()
-
             if message.get("type") == "websocket.disconnect":
                 break
 
+            # Resolve an inbound frame from either a JSON control message or a raw binary frame.
+            frame = None
             text = message.get("text")
             data = message.get("bytes")
-
             if text is not None:
-                if text.strip().lower() == "score":
+                try:
+                    payload = json.loads(text)
+                except (ValueError, TypeError):
+                    continue  # ignore unparseable control text; keep the stream alive
+                if not isinstance(payload, dict):
+                    continue
+                mtype = payload.get("type")
+                if mtype == "hello":
+                    continue  # the session was created on accept; nothing else to do
+                if mtype == "score":
                     await _score_camera(websocket, session, registry, ledger, ctx, bound)
                     scored = True
                     break
-                # ignore other control text quietly (keeps the stream alive)
+                if mtype == "frame":
+                    frame = _decode_base64_frame(payload.get("jpeg_base64") or "")
+                else:
+                    continue
+            elif data is not None:
+                frame = _decode_jpeg_frame(data)
+            else:
                 continue
 
-            if data is None:
-                continue
-
-            frame = _decode_frame(data)
             if frame is None:
-                await websocket.send_json(
-                    {"type": "status", "tier": "capture", "accepted": False,
-                     "reason": "undecodable frame"}
-                )
-                continue
+                continue  # undecodable frame — skip silently, never count it toward the challenge
 
             # Backpressure: bound the buffer; drop the oldest rather than grow without limit (§7).
             if len(ctx.frames) >= _MAX_FRAMES_BUFFERED:
                 ctx.frames.pop(0)
             session.add_frame(ctx.session_id, frame)
 
-            await websocket.send_json(
-                {"type": "status", "tier": "capture", "accepted": True,
-                 "frames_buffered": len(ctx.frames),
-                 "ready_to_score": len(ctx.frames) >= _MIN_FRAMES_TO_SCORE}
-            )
+            # Enough of the commanded motion captured -> verify now and return the verdict.
+            if len(ctx.frames) >= _FRAMES_TO_AUTO_SCORE:
+                await _score_camera(websocket, session, registry, ledger, ctx, bound)
+                scored = True
+                break
+
+            await websocket.send_json(_live_status_message(len(ctx.frames)))
 
     except WebSocketDisconnect:
         bound.info("verify.ws.disconnected")
     except Exception as exc:  # noqa: BLE001 — a stream failure must never crash the server (§4)
         bound.warning("verify.ws.error", error=repr(exc))
         try:
-            await websocket.send_json({"type": "error", "detail": "stream error"})
+            await websocket.send_json({"type": "error", "message": "stream error"})
         except Exception:  # noqa: BLE001 — socket may already be gone
             pass
     finally:
@@ -424,7 +530,7 @@ async def _score_camera(
     if len(ctx.frames) < _MIN_FRAMES_TO_SCORE:
         await websocket.send_json(
             {"type": "error",
-             "detail": f"need >= {_MIN_FRAMES_TO_SCORE} frames to score (have {len(ctx.frames)})"}
+             "message": f"need >= {_MIN_FRAMES_TO_SCORE} frames to score (have {len(ctx.frames)})"}
         )
         return
 

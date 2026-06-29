@@ -1,5 +1,7 @@
 # ADR-003 — Innovation Thesis: Consistency-First Defense for the Un-sourceable Document
 
+> **Amended by [ADR-004](ADR-004-v2-progressive-evidence-architecture.md).** The consistency thesis stands and is now v2's Layer 4 (deterministic rules over a claim graph). The "no-ML-anywhere / no black-box model" commitment is narrowed to: no ML in the *decision* path — a VLM *reads* arbitrary layouts into a claim graph, deterministic rules *decide*, and every VLM number is box-grounded + independently re-read. See ADR-004 §0, §5, §9.
+
 > **Status:** Accepted · 2026-06-28 · builds on [ADR-002](ADR-002-provenance-first-verification.md)
 > **Grounded by:** [RESEARCH-001](RESEARCH-001-industry-landscape.md)
 > This is *why Satyum wins* — the locked, defensible, genuinely-novel core. Not positioning; an engineering thesis.

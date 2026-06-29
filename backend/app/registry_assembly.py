@@ -19,6 +19,7 @@ pinning the CCA-India root) can point them at a specific pinned trust store (§5
 
 from __future__ import annotations
 
+from anomaly.analyzer import AnomalyIntelligenceAnalyzer
 from app.registry import AnalyzerRegistry
 from capture.antispoof import (
     SpectralMoireAnalyzer,
@@ -32,6 +33,7 @@ from capture.rectify import RectifyQualityAnalyzer
 from forensics.arithmetic import ArithmeticConsistencyAnalyzer
 from forensics.copy_move import CopyMoveAnalyzer
 from forensics.entities import EntityExtractionAnalyzer
+from forensics.extraction.analyzer import VLMClaimGraphAnalyzer
 from forensics.layout import FontLayoutAnalyzer
 from forensics.metadata import PdfStructureAnalyzer
 
@@ -39,6 +41,8 @@ from forensics.metadata import PdfStructureAnalyzer
 from forensics.ocr import DocumentParseAnalyzer
 from forensics.phash import PhashResubmissionAnalyzer
 from forensics.template import TemplateFingerprintAnalyzer
+from intake.sufficiency import IntakeSufficiencyAnalyzer
+from rules.analyzer import ConsistencyRulesAnalyzer
 from verification.provenance import PdfOnlyRedFlagAnalyzer
 
 # Tier 1 — cryptographic provenance (the cyber core)
@@ -54,6 +58,9 @@ def build_registry(trust_anchor_dir: str | None = None) -> AnalyzerRegistry:
     """
     registry = AnalyzerRegistry()
 
+    # --- Tier 0: intake + evidence sufficiency (FILE) — classify + gate before anything else ----
+    registry.register(IntakeSufficiencyAnalyzer())                          # layer 1, order 1 (FILE)
+
     # --- Tier 1: provenance (FILE) — signature first, then the source-avoidance red flag --------
     registry.register(PadesSignatureAnalyzer(anchor_dir=trust_anchor_dir))  # layer 1, order 10
     registry.register(C2paProvenanceAnalyzer(anchor_dir=trust_anchor_dir))  # layer 1, order 11
@@ -64,12 +71,21 @@ def build_registry(trust_anchor_dir: str | None = None) -> AnalyzerRegistry:
 
     # --- Tier 2: forensics (FILE / ANY) — parse publishes the statement before arithmetic -------
     registry.register(DocumentParseAnalyzer())                             # layer 3, order 5 (ANY)
+    registry.register(VLMClaimGraphAnalyzer())                             # layer 3, order 6 (FILE)
+    registry.register(ConsistencyRulesAnalyzer())                          # layer 3, order 7 (FILE)
+    registry.register(AnomalyIntelligenceAnalyzer())                       # layer 3, order 50 (FILE)
     registry.register(ArithmeticConsistencyAnalyzer())                     # layer 3 (ANY)
     registry.register(TemplateFingerprintAnalyzer())                       # layer 3, order 31 (FILE)
     registry.register(FontLayoutAnalyzer())                                # layer 3, order 32 (ANY)
     registry.register(PdfStructureAnalyzer())                              # layer 3, order 30 (FILE)
     registry.register(CopyMoveAnalyzer())                                  # layer 3, order 35 (ANY)
     registry.register(PhashResubmissionAnalyzer())                         # layer 3, order 40 (ANY)
+    # TODO(satyum): cross-SESSION fraud-ring seeding. The pHash analyzer holds an in-memory store that
+    # starts empty each process, so resubmission is only caught WITHIN a run today. Seeding it from the
+    # durable audit ledger's REJECTED sessions (persist phash_hex into the audit payload, then load the
+    # SqlitePhashStore/Postgres at startup) closes the cross-session reuse case and lets a confirmed
+    # fraud-ring hit raise measurements["hard_reject"]. Deferred as a persistence-layer unit (ADR-005
+    # federated memory), not a logic gap — the detector itself is real and tested (tests/test_phash.py).
     registry.register(EntityExtractionAnalyzer())                          # layer 3, order 45 (FILE)
 
     # --- Tier 3: anti-spoof votes (CAMERA) — low/medium-weight, never standalone gates ----------

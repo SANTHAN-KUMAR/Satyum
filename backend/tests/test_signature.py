@@ -38,7 +38,7 @@ pyhanko = pytest.importorskip("pyhanko")
 from cryptography import x509  # noqa: E402
 from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
-from cryptography.x509.oid import NameOID  # noqa: E402
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID  # noqa: E402
 
 from verification.signature import (  # noqa: E402
     PROV_ABSENT,
@@ -51,16 +51,19 @@ from verification.signature import (  # noqa: E402
 # Fixture generation: a real CA, a real leaf, a real signed PDF — all in memory.
 # --------------------------------------------------------------------------------------------------
 
+
 def _gen_key() -> rsa.RSAPrivateKey:
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
 def _name(cn: str) -> x509.Name:
-    return x509.Name([
-        x509.NameAttribute(NameOID.COUNTRY_NAME, "IN"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Satyum Test"),
-        x509.NameAttribute(NameOID.COMMON_NAME, cn),
-    ])
+    return x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "IN"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Satyum Test"),
+            x509.NameAttribute(NameOID.COMMON_NAME, cn),
+        ]
+    )
 
 
 def _make_ca(cn: str) -> tuple[rsa.RSAPrivateKey, x509.Certificate]:
@@ -78,9 +81,15 @@ def _make_ca(cn: str) -> tuple[rsa.RSAPrivateKey, x509.Certificate]:
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .add_extension(
             x509.KeyUsage(
-                digital_signature=True, key_cert_sign=True, crl_sign=True,
-                content_commitment=False, key_encipherment=False, data_encipherment=False,
-                key_agreement=False, encipher_only=False, decipher_only=False,
+                digital_signature=True,
+                key_cert_sign=True,
+                crl_sign=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                encipher_only=False,
+                decipher_only=False,
             ),
             critical=True,
         )
@@ -106,9 +115,15 @@ def _make_leaf(
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             x509.KeyUsage(
-                digital_signature=True, content_commitment=True,  # content_commitment = non-repudiation
-                key_cert_sign=False, crl_sign=False, key_encipherment=False,
-                data_encipherment=False, key_agreement=False, encipher_only=False, decipher_only=False,
+                digital_signature=True,
+                content_commitment=True,  # content_commitment = non-repudiation
+                key_cert_sign=False,
+                crl_sign=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                encipher_only=False,
+                decipher_only=False,
             ),
             critical=True,
         )
@@ -119,11 +134,13 @@ def _make_leaf(
 
 def _to_asn1_cert(cert: x509.Certificate):
     from asn1crypto import x509 as asn1_x509
+
     return asn1_x509.Certificate.load(cert.public_bytes(serialization.Encoding.DER))
 
 
 def _to_asn1_key(key: rsa.RSAPrivateKey):
     from asn1crypto import keys as asn1_keys
+
     der = key.private_bytes(
         serialization.Encoding.DER,
         serialization.PrivateFormat.PKCS8,
@@ -140,13 +157,13 @@ def _minimal_pdf() -> bytes:
     from pyhanko.pdf_utils.writer import PdfFileWriter
 
     w = PdfFileWriter()
-    page = generic.DictionaryObject({
-        pdf_name("/Type"): pdf_name("/Page"),
-        pdf_name("/MediaBox"): generic.ArrayObject(
-            [generic.NumberObject(x) for x in (0, 0, 612, 792)]
-        ),
-        pdf_name("/Resources"): generic.DictionaryObject(),
-    })
+    page = generic.DictionaryObject(
+        {
+            pdf_name("/Type"): pdf_name("/Page"),
+            pdf_name("/MediaBox"): generic.ArrayObject([generic.NumberObject(x) for x in (0, 0, 612, 792)]),
+            pdf_name("/Resources"): generic.DictionaryObject(),
+        }
+    )
     w.insert_page(page)
     buf = io.BytesIO()
     w.write(buf)
@@ -181,6 +198,7 @@ def _sign_pdf(pdf_bytes: bytes, leaf_key, leaf_cert, ca_cert) -> bytes:
 # --------------------------------------------------------------------------------------------------
 # Session-scoped artifacts (key generation + signing are slow; build each fixture once).
 # --------------------------------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def trusted_ca():
@@ -238,14 +256,18 @@ def pdf_appended_after_signature(pdf_signed_trusted) -> bytes:
 
 def _ctx(pdf_bytes: bytes) -> AnalysisContext:
     return AnalysisContext(
-        session_id="t", intake_mode=Mode.FILE,
-        file_bytes=pdf_bytes, file_name="doc.pdf", file_mime="application/pdf",
+        session_id="t",
+        intake_mode=Mode.FILE,
+        file_bytes=pdf_bytes,
+        file_name="doc.pdf",
+        file_mime="application/pdf",
     )
 
 
 # --------------------------------------------------------------------------------------------------
 # (a) Positive control: signed by the pinned CA -> verified.
 # --------------------------------------------------------------------------------------------------
+
 
 def test_a_trusted_signature_is_verified(anchor_dir, pdf_signed_trusted):
     az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
@@ -268,6 +290,7 @@ def test_a_trusted_signature_is_verified(anchor_dir, pdf_signed_trusted):
 # (b) MUST-FAIL: attacker's own CA, not pinned -> chain fails -> tampered.
 # --------------------------------------------------------------------------------------------------
 
+
 def test_b_attacker_cert_chain_fails(anchor_dir, pdf_signed_attacker):
     az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
     ctx = _ctx(pdf_signed_attacker)
@@ -286,6 +309,7 @@ def test_b_attacker_cert_chain_fails(anchor_dir, pdf_signed_attacker):
 # (c) MUST-FAIL: bytes appended after /ByteRange (shadow attack) -> coverage/digest fails -> tampered.
 # --------------------------------------------------------------------------------------------------
 
+
 def test_c_appended_bytes_after_signature_is_tampered(anchor_dir, pdf_appended_after_signature):
     az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
     ctx = _ctx(pdf_appended_after_signature)
@@ -303,6 +327,7 @@ def test_c_appended_bytes_after_signature_is_tampered(anchor_dir, pdf_appended_a
 # (d) Unsigned PDF -> absent -> NOT_EVALUATED (route to Tier 2; never a pass).
 # --------------------------------------------------------------------------------------------------
 
+
 def test_d_unsigned_pdf_is_absent_not_evaluated(anchor_dir):
     az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
     ctx = _ctx(_MINIMAL_PDF)
@@ -317,6 +342,7 @@ def test_d_unsigned_pdf_is_absent_not_evaluated(anchor_dir):
 # --------------------------------------------------------------------------------------------------
 # The discrimination claim, stated explicitly (would FAIL against any constant return).
 # --------------------------------------------------------------------------------------------------
+
 
 def test_verified_is_separated_from_tampered(anchor_dir, pdf_signed_trusted, pdf_signed_attacker):
     az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
@@ -352,6 +378,7 @@ def test_unparsable_pdf_fails_closed(anchor_dir):
 # not TRUTHFULNESS. A validly-signed statement is "verified source", NOT a fraud verdict.
 # --------------------------------------------------------------------------------------------------
 
+
 def test_honest_bound_verified_means_origin_not_truthfulness(anchor_dir, pdf_signed_trusted):
     az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
     sig = az.analyze(_ctx(pdf_signed_trusted))
@@ -366,6 +393,7 @@ def test_honest_bound_verified_means_origin_not_truthfulness(anchor_dir, pdf_sig
 # --------------------------------------------------------------------------------------------------
 # Protocol conformance: attributes the registry/orchestrator rely on.
 # --------------------------------------------------------------------------------------------------
+
 
 def test_analyzer_protocol_attributes():
     az = PadesSignatureAnalyzer()
@@ -386,6 +414,203 @@ def test_not_applicable_on_non_pdf():
 
 
 # ==================================================================================================
+# Revocation (CRL) + RFC3161 timestamp must-fail / discrimination fixtures (ADR-004 Layer-1 hardening).
+#
+# These prove the revocation and timestamp code paths actually work — generated with real CRLs (signed
+# by the test CA) and a real DummyTimeStamper, no hand-tuning. The litmus: a REVOKED signing cert must
+# flip a genuinely-signed PDF from verified -> tampered, and a non-revoking CRL must NOT break it.
+# ==================================================================================================
+
+
+def _make_crl(ca_key, ca_cert, revoked_serials) -> bytes:
+    """A real CRL signed by ``ca_cert`` revoking ``revoked_serials`` — returned as DER bytes."""
+    now = datetime.datetime.now(datetime.UTC)
+    builder = (
+        x509.CertificateRevocationListBuilder()
+        .issuer_name(ca_cert.subject)
+        .last_update(now - datetime.timedelta(hours=1))
+        .next_update(now + datetime.timedelta(days=7))
+    )
+    for serial in revoked_serials:
+        builder = builder.add_revoked_certificate(
+            x509.RevokedCertificateBuilder()
+            .serial_number(serial)
+            .revocation_date(now - datetime.timedelta(minutes=30))
+            .build()
+        )
+    return builder.sign(ca_key, hashes.SHA256()).public_bytes(serialization.Encoding.DER)
+
+
+def _make_tsa(ca_key, ca_cert, cn: str = "Satyum Test TSA"):
+    """A timestamping-authority leaf cert (EKU=timeStamping) issued by ``ca_cert``."""
+    key = _gen_key()
+    now = datetime.datetime.now(datetime.UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(_name(cn))
+        .issuer_name(ca_cert.subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=825))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.TIME_STAMPING]), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    return key, cert
+
+
+def _sign_pdf_timestamped(pdf_bytes, leaf_key, leaf_cert, ca_cert, tsa_key, tsa_cert) -> bytes:
+    """Sign ``pdf_bytes`` and embed a real RFC3161 timestamp token from a DummyTimeStamper (PAdES-T)."""
+    from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+    from pyhanko.sign import signers
+    from pyhanko.sign.timestamps import DummyTimeStamper
+    from pyhanko_certvalidator.registry import SimpleCertificateStore
+
+    registry = SimpleCertificateStore()
+    registry.register_multiple([_to_asn1_cert(ca_cert), _to_asn1_cert(leaf_cert)])
+    cms_signer = signers.SimpleSigner(
+        signing_cert=_to_asn1_cert(leaf_cert),
+        signing_key=_to_asn1_key(leaf_key),
+        cert_registry=registry,
+    )
+    embed_store = SimpleCertificateStore()
+    embed_store.register(_to_asn1_cert(ca_cert))
+    dts = DummyTimeStamper(
+        tsa_cert=_to_asn1_cert(tsa_cert),
+        tsa_key=_to_asn1_key(tsa_key),
+        certs_to_embed=embed_store,
+        fixed_dt=datetime.datetime.now(datetime.UTC),
+    )
+    pdf_signer = signers.PdfSigner(
+        signers.PdfSignatureMetadata(field_name="Signature1"),
+        signer=cms_signer,
+        timestamper=dts,
+    )
+    return pdf_signer.sign_pdf(IncrementalPdfFileWriter(io.BytesIO(pdf_bytes))).getvalue()
+
+
+@pytest.fixture(scope="module")
+def signed_bundle(trusted_ca):
+    """The trusted-CA-signed PDF together with the leaf cert (so a test can revoke its serial)."""
+    ca_key, ca_cert = trusted_ca
+    leaf_key, leaf_cert = _make_leaf(ca_key, ca_cert, "statements.bank.example")
+    pdf = _sign_pdf(_MINIMAL_PDF, leaf_key, leaf_cert, ca_cert)
+    return {"ca_key": ca_key, "ca_cert": ca_cert, "leaf_cert": leaf_cert, "pdf": pdf}
+
+
+def _anchor_dir_with_crl(tmp_path, ca_cert, crl_der) -> str:
+    """A trust-anchor dir pinning ``ca_cert`` with a CRL dropped in its ``crls/`` subdir."""
+    d = tmp_path / "anchors"
+    d.mkdir()
+    (d / "ca.pem").write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    crld = d / "crls"
+    crld.mkdir()
+    (crld / "ca.crl").write_bytes(crl_der)
+    return str(d)
+
+
+def test_revoked_certificate_is_tampered(tmp_path, signed_bundle):
+    """MUST-FAIL: a genuinely-signed PDF whose signing cert is REVOKED -> tampered (suspicion 1.0).
+
+    Discrimination: same bytes, same chain-to-anchor — only the CRL changes the verdict. Would FAIL
+    against a constant (the very same PDF verifies clean when the CRL does not revoke it, below).
+    """
+    crl = _make_crl(
+        signed_bundle["ca_key"],
+        signed_bundle["ca_cert"],
+        [signed_bundle["leaf_cert"].serial_number],
+    )
+    anchor = _anchor_dir_with_crl(tmp_path, signed_bundle["ca_cert"], crl)
+    # "require" forces a revocation check even though the test leaf declares no CRL DP, so the
+    # provided CRL (matched by issuer) is consulted — the genuine path keeps the softer default.
+    az = PadesSignatureAnalyzer(anchor_dir=anchor, revocation_mode="require")
+    sig = az.analyze(_ctx(signed_bundle["pdf"]))
+
+    assert sig.status == SignalStatus.VALID
+    assert sig.suspicion == 1.0, "a revoked signing certificate must be flagged as tampered"
+    assert sig.measurements["signatures"][0]["revoked"] is True
+    assert sig.measurements["provenance_result"] == "TAMPERED"
+    assert "revoked" in sig.reason.lower()
+    assert sig.measurements["crls_loaded"] == 1  # the CRL was actually loaded and processed
+
+
+def test_non_revoking_crl_keeps_signature_verified(tmp_path, signed_bundle):
+    """A present-but-non-revoking CRL must NOT break a genuine signature (no false tamper).
+
+    This proves the CRL is genuinely processed (crls_loaded == 1) yet a clean revocation status
+    leaves the verified verdict intact — the other half of the discrimination pair.
+    """
+    crl = _make_crl(signed_bundle["ca_key"], signed_bundle["ca_cert"], [])  # revokes nothing
+    anchor = _anchor_dir_with_crl(tmp_path, signed_bundle["ca_cert"], crl)
+    az = PadesSignatureAnalyzer(anchor_dir=anchor, revocation_mode="require")
+    sig = az.analyze(_ctx(signed_bundle["pdf"]))
+
+    assert sig.status == SignalStatus.VALID
+    assert sig.suspicion == 0.0, "a non-revoking CRL must not break a genuine signature"
+    assert sig.measurements["signatures"][0]["revoked"] is False
+    assert sig.measurements["crls_loaded"] == 1
+
+
+def test_embedded_timestamp_is_validated(anchor_dir, trusted_ca):
+    """A PAdES-T signature with a real RFC3161 timestamp -> verified, and the timestamp is validated.
+
+    The TSA cert chains to the same pinned anchor, so the embedded token must validate (trusted) and
+    its asserted signing time must be surfaced in the evidence — proving timestamp validation runs.
+    """
+    ca_key, ca_cert = trusted_ca
+    leaf_key, leaf_cert = _make_leaf(ca_key, ca_cert, "statements.bank.example")
+    tsa_key, tsa_cert = _make_tsa(ca_key, ca_cert)
+    pdf = _sign_pdf_timestamped(_MINIMAL_PDF, leaf_key, leaf_cert, ca_cert, tsa_key, tsa_cert)
+
+    az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
+    sig = az.analyze(_ctx(pdf))
+
+    assert sig.status == SignalStatus.VALID and sig.suspicion == 0.0
+    ts = sig.measurements["signatures"][0]["timestamp"]
+    assert ts is not None, "embedded RFC3161 timestamp must be parsed"
+    assert ts["trusted"] is True, "TSA chains to a pinned anchor -> timestamp trusted"
+    assert ts["time"] is not None
+    assert "timestamp validated" in sig.reason.lower()
+
+
+def test_real_cca_india_root_is_loaded_and_pinned():
+    """The real downloaded CCA-India 2022 root loads as a pinned anchor (production trust store).
+
+    Not a happy-path stub: asserts the shipped anchor dir actually yields a usable CCA root so the
+    analyzer is production-true, and that an unsigned PDF against it still routes to forensics (the
+    anchor store being real must not change the absence-of-signature behaviour).
+    """
+    from pathlib import Path
+
+    from verification.signature import _load_trust_roots
+
+    anchor_dir = Path(__file__).resolve().parents[1] / "verification" / "trust_anchors"
+    roots = _load_trust_roots(anchor_dir)
+    subjects = {r.subject.human_friendly for r in roots}
+    assert any("CCA India 2022" in s for s in subjects), f"CCA root not pinned; got {subjects}"
+
+    az = PadesSignatureAnalyzer()  # default (shipped) anchor dir
+    sig = az.analyze(_ctx(_MINIMAL_PDF))
+    assert sig.status == SignalStatus.NOT_EVALUATED  # unsigned -> forensics, never auto-pass
+    assert sig.measurements.get("provenance_result") == "NO_SOURCE"
+
+
+# ==================================================================================================
 # C2PA content-provenance analyzer.
 #
 # The c2pa SDK (c2pa-python==0.6.1) is an optional heavy dependency; when it is not installed these
@@ -402,6 +627,7 @@ _c2pa_spec = importlib.util.find_spec("c2pa")
 requires_c2pa = pytest.mark.skipif(
     _c2pa_spec is None, reason="c2pa SDK not installed — image-provenance path untested here"
 )
+
 
 # A genuinely valid PNG with NO C2PA manifest, Pillow-encoded once at import.
 # NB: a hand-rolled minimal PNG is REJECTED by c2pa-rs's image reader ("asset could not be parsed"),
@@ -420,8 +646,11 @@ _VALID_PNG_NO_MANIFEST = _valid_png_no_manifest()
 
 def _png_ctx() -> AnalysisContext:
     return AnalysisContext(
-        session_id="t", intake_mode=Mode.FILE,
-        file_bytes=_VALID_PNG_NO_MANIFEST, file_name="img.png", file_mime="image/png",
+        session_id="t",
+        intake_mode=Mode.FILE,
+        file_bytes=_VALID_PNG_NO_MANIFEST,
+        file_name="img.png",
+        file_mime="image/png",
     )
 
 
@@ -464,8 +693,11 @@ def test_c2pa_unparsable_image_fails_closed_to_error(anchor_dir):
     # Valid PNG magic so the image path is selected, then bytes c2pa-rs cannot decode as an image.
     corrupt = b"\x89PNG\r\n\x1a\n" + b"\x00\x01\x02\x03 not a real png \xff\xfe" * 4
     ctx = AnalysisContext(
-        session_id="t", intake_mode=Mode.FILE,
-        file_bytes=corrupt, file_name="x.png", file_mime="image/png",
+        session_id="t",
+        intake_mode=Mode.FILE,
+        file_bytes=corrupt,
+        file_name="x.png",
+        file_mime="image/png",
     )
     assert az.applicable(ctx) is True
     sig = az.analyze(ctx)

@@ -39,9 +39,15 @@ from app.contracts import AnalysisContext, LayerSignal, Mode
 logger = logging.getLogger(__name__)
 
 # Provenance states surfaced in measurements['provenance'] (shared vocabulary with the UI/Provenance).
-PROV_VERIFIED = "verified"  # intact + chains to a pinned anchor + covers the whole file
-PROV_TAMPERED = "tampered"  # signature present but INVALID (forged chain / appended bytes / bad digest)
-PROV_ABSENT = "absent"      # no signature at all -> route to Tier 2
+PROV_VERIFIED = "verified"  # intact + chains to a pinned anchor + covers the whole file + not revoked
+PROV_TAMPERED = "tampered"  # present but INVALID: forged chain / appended bytes / bad digest / revoked
+PROV_ABSENT = "absent"  # no signature at all -> route to Tier 2
+
+# v2 provenance result contract (ADR-004 Layer 1) — the states surfaced to the decision brain.
+# SOURCE_AVOIDED is emitted by the PDF-only red-flag analyzer (provenance.py), not here.
+PROV_RESULT_VERIFIED = "VERIFIED_SOURCE"
+PROV_RESULT_TAMPERED = "TAMPERED"
+PROV_RESULT_NO_SOURCE = "NO_SOURCE"
 
 # Suspicion is the binary cyber-fact: a verified chain is clean (0.0); an invalid one is active
 # tampering evidence (1.0). There is no "somewhat signed" — a chain either reaches the anchor or not.
@@ -95,6 +101,54 @@ def _load_trust_roots(anchor_dir: Path) -> list[Any]:
     return roots
 
 
+def _load_crls(anchor_dir: Path) -> list[Any]:
+    """Load every ``.crl`` in ``anchor_dir`` and its ``crls/`` subdir as asn1crypto CertificateLists.
+
+    Offline revocation: production fetches CRL/OCSP online (``settings.signature_allow_fetching``), but
+    an air-gapped / test deployment can pin CRLs next to the anchors — e.g. the CCA-India CRL published
+    alongside the root. DER and PEM-wrapped CRLs are both accepted; a malformed CRL is skipped with a
+    warning (it must never silently shrink the revocation evidence).
+    """
+    from asn1crypto import crl as asn1_crl
+    from asn1crypto import pem
+
+    crls: list[Any] = []
+    for d in (anchor_dir, anchor_dir / "crls"):
+        if not d.is_dir():
+            continue
+        for path in sorted(d.iterdir()):
+            if not path.is_file() or path.suffix.lower() != ".crl":
+                continue
+            try:
+                data = path.read_bytes()
+                if data.lstrip().startswith(b"-----BEGIN"):
+                    _, _, data = pem.unarmor(data)
+                crls.append(asn1_crl.CertificateList.load(data))
+            except (ValueError, OSError) as exc:
+                logger.warning("skipping unparsable CRL %s: %s", path.name, exc)
+    return crls
+
+
+def _timestamp_info(status: Any) -> dict[str, Any] | None:
+    """Project a signature's embedded RFC3161 timestamp validity to a JSON-safe dict, or ``None``.
+
+    ``status.timestamp_validity`` is a ``TimestampSignatureStatus`` when the signature carries a
+    trusted-timestamp token (PAdES-T and above), else ``None``. We surface the asserted signing *time*
+    and whether that token itself is intact / valid / chains to a pinned TSA root — so the evidence
+    pack can show "signed at <time>, timestamp authority trusted".
+    """
+    tv = getattr(status, "timestamp_validity", None)
+    if tv is None:
+        return None
+    ts = getattr(tv, "timestamp", None)
+    return {
+        "time": ts.isoformat() if ts is not None else None,
+        "intact": bool(getattr(tv, "intact", False)),
+        "valid": bool(getattr(tv, "valid", False)),
+        "trusted": bool(getattr(tv, "trusted", False)),
+    }
+
+
 class PadesSignatureAnalyzer:
     """Verify embedded PAdES/CMS signatures on a PDF, chaining to a pinned trust anchor.
 
@@ -111,9 +165,23 @@ class PadesSignatureAnalyzer:
     mode = Mode.FILE
     order = 10
 
-    def __init__(self, anchor_dir: str | None = None) -> None:
-        # Configurable so tests can pin a self-generated test CA as the trust root (§5 config-over-hardcode).
+    def __init__(
+        self,
+        anchor_dir: str | None = None,
+        *,
+        revocation_mode: str | None = None,
+        allow_fetching: bool | None = None,
+    ) -> None:
+        # Configurable so tests can pin a self-generated test CA as the trust root and exercise an
+        # explicit revocation policy (§5 config-over-hardcode). Defaults come from settings: production
+        # sets allow_fetching=True + revocation_mode="hard-fail" for online CRL/OCSP, the strict posture.
         self._anchor_dir_override = anchor_dir
+        self._revocation_mode = (
+            revocation_mode if revocation_mode is not None else settings.signature_revocation_mode
+        )
+        self._allow_fetching = (
+            allow_fetching if allow_fetching is not None else settings.signature_allow_fetching
+        )
 
     def applicable(self, ctx: AnalysisContext) -> bool:
         if ctx.intake_mode != Mode.FILE or not ctx.file_bytes:
@@ -124,9 +192,7 @@ class PadesSignatureAnalyzer:
 
     def analyze(self, ctx: AnalysisContext) -> LayerSignal:
         if not ctx.file_bytes:
-            return LayerSignal.not_evaluated(
-                self.name, self.layer, self.mode, "no file bytes to verify"
-            )
+            return LayerSignal.not_evaluated(self.name, self.layer, self.mode, "no file bytes to verify")
         try:
             return self._analyze(ctx)
         except Exception as exc:  # noqa: BLE001 — fail-closed boundary (§4); never crash the verdict
@@ -143,12 +209,19 @@ class PadesSignatureAnalyzer:
         from pyhanko_certvalidator import ValidationContext
         from pyhanko_certvalidator.errors import PathValidationError
 
+        try:
+            from pyhanko_certvalidator.errors import RevokedError
+        except ImportError:  # older certvalidator: fall back to message-based revocation detection
+            RevokedError = ()  # type: ignore[assignment]  # isinstance(x, ()) is always False
+
         anchor_dir = _resolve_anchor_dir(self._anchor_dir_override)
         trust_roots = _load_trust_roots(anchor_dir)
         if not trust_roots:
             # Fail-closed (§10): with no pinned anchors we cannot assert a chain — never auto-pass.
             return LayerSignal.error(
-                self.name, self.layer, self.mode,
+                self.name,
+                self.layer,
+                self.mode,
                 f"no pinned trust anchors loaded from {anchor_dir} — cannot verify chain",
             )
 
@@ -157,36 +230,72 @@ class PadesSignatureAnalyzer:
             embedded = list(reader.embedded_signatures)
         except Exception as exc:  # noqa: BLE001 — malformed PDF is ordinary bad input, fail-closed
             logger.warning("could not parse PDF for signature extraction: %r", exc)
-            return LayerSignal.error(
-                self.name, self.layer, self.mode, f"unparsable PDF: {exc!r}"
-            )
+            return LayerSignal.error(self.name, self.layer, self.mode, f"unparsable PDF: {exc!r}")
 
         if not embedded:
             # Absent -> NOT_EVALUATED: route to Tier 2 forensics. Absence is never an auto-pass.
             return LayerSignal.not_evaluated(
-                self.name, self.layer, self.mode,
+                self.name,
+                self.layer,
+                self.mode,
                 "no embedded PAdES/CMS signature — routing to forensic fallback",
-                provenance=PROV_ABSENT, method="PAdES",
+                provenance=PROV_ABSENT,
+                provenance_result=PROV_RESULT_NO_SOURCE,
+                method="PAdES",
             )
 
-        vc = ValidationContext(trust_roots=trust_roots, allow_fetching=False)
+        # Real revocation: production fetches CRL/OCSP from the certificate's endpoints
+        # (settings.signature_allow_fetching=True); offline / air-gapped deployments pin CRLs next to
+        # the anchors (<anchor_dir>/crls). revocation_mode is the certvalidator policy (§10).
+        crls = _load_crls(anchor_dir)
+        vc = ValidationContext(
+            trust_roots=trust_roots,
+            crls=crls,
+            allow_fetching=self._allow_fetching,
+            revocation_mode=self._revocation_mode,
+        )
+        # Embedded RFC3161 timestamps validate against their own context (the TSA chains to a pinned
+        # root); revocation is kept soft for the TSA so a timestamp revinfo gap never hard-fails an
+        # otherwise-valid document signature.
+        ts_vc = ValidationContext(
+            trust_roots=trust_roots,
+            crls=crls,
+            allow_fetching=self._allow_fetching,
+            revocation_mode="soft-fail",
+        )
 
         # Evaluate every signature; the document is only verified if ALL present signatures verify
-        # and at least one covers the whole file. Any failing/under-covering signature is tampering.
+        # and at least one covers the whole file. Any failing / under-covering / revoked signature is
+        # tampering evidence.
         per_sig: list[dict[str, Any]] = []
         all_verified = True
         whole_file_covered = False
 
         for idx, emb in enumerate(embedded):
+            revoked = False
+            ts_info: dict[str, Any] | None = None
+            signer_time: str | None = None
             try:
-                status = validate_pdf_signature(emb, signer_validation_context=vc)
+                status = validate_pdf_signature(
+                    emb,
+                    signer_validation_context=vc,
+                    ts_validation_context=ts_vc,
+                )
                 intact = bool(status.intact)
                 valid = bool(status.valid)
                 trusted = bool(status.trusted)
                 coverage = status.coverage
+                # Under soft-fail a revoked cert surfaces here (no exception): it was checked against
+                # the CRL/OCSP and found revoked. Under hard-fail it raises instead (handled below).
+                revoked = bool(getattr(status, "revoked", False))
+                ts_info = _timestamp_info(status)
+                srdt = getattr(status, "signer_reported_dt", None)
+                signer_time = srdt.isoformat() if srdt is not None else None
             except PathValidationError as exc:
-                # Chain explicitly failed to reach a pinned anchor (attacker / self-signed cert).
-                logger.info("signature %d chain validation failed: %s", idx, exc)
+                # Chain failed to reach a pinned anchor (attacker / self-signed cert) OR — under
+                # hard-fail revocation — the cert is revoked (RevokedError is a PathValidationError).
+                revoked = isinstance(exc, RevokedError) or "revoked" in str(exc).lower()
+                logger.info("signature %d path validation failed (revoked=%s): %s", idx, revoked, exc)
                 intact = valid = trusted = False
                 coverage = SignatureCoverageLevel.UNCLEAR
             except Exception as exc:  # noqa: BLE001 — a per-signature failure must not pass-through
@@ -195,42 +304,59 @@ class PadesSignatureAnalyzer:
                 coverage = SignatureCoverageLevel.UNCLEAR
 
             covers_whole = coverage == SignatureCoverageLevel.ENTIRE_FILE
-            sig_verified = intact and valid and trusted and covers_whole
+            sig_verified = intact and valid and trusted and covers_whole and not revoked
             all_verified = all_verified and sig_verified
             whole_file_covered = whole_file_covered or covers_whole
 
-            per_sig.append({
-                "index": idx,
-                "intact": intact,        # digest matches the covered bytes
-                "valid": valid,          # CMS/PKCS#7 math validates
-                "trusted": trusted,      # chain reaches a pinned anchor
-                "covers_whole_file": covers_whole,  # no appended bytes after /ByteRange
-                "coverage": coverage.name if coverage is not None else "NONE",
-            })
+            per_sig.append(
+                {
+                    "index": idx,
+                    "intact": intact,  # digest matches the covered bytes
+                    "valid": valid,  # CMS/PKCS#7 math validates
+                    "trusted": trusted,  # chain reaches a pinned anchor
+                    "covers_whole_file": covers_whole,  # no appended bytes after /ByteRange
+                    "coverage": coverage.name if coverage is not None else "NONE",
+                    "revoked": revoked,  # CRL/OCSP says the signing certificate is revoked
+                    "timestamp": ts_info,  # embedded RFC3161 timestamp validity (or None)
+                    "signer_reported_time": signer_time,
+                }
+            )
 
         verified = all_verified and whole_file_covered
         measurements: dict[str, Any] = {
             "provenance": PROV_VERIFIED if verified else PROV_TAMPERED,
+            "provenance_result": PROV_RESULT_VERIFIED if verified else PROV_RESULT_TAMPERED,
             "method": "PAdES",
             "signature_count": len(embedded),
             "anchors_pinned": len(trust_roots),
+            "crls_loaded": len(crls),
+            "revocation_mode": self._revocation_mode,
+            "online_revocation": self._allow_fetching,
             "signatures": per_sig,
         }
 
         if verified:
             # Source-of-truth answered at the PKI root: publish for downstream analyzers / red-flag.
             ctx.shared["provenance_verified"] = True
+            ts0 = per_sig[0].get("timestamp")
+            ts_note = f"; RFC3161 timestamp validated ({ts0['time']})" if ts0 and ts0.get("trusted") else ""
             return LayerSignal.valid(
-                self.name, self.layer, self.mode,
-                SUSPICION_VERIFIED, PROVENANCE_WEIGHT,
-                "PAdES signature verified: intact, chains to a pinned trust anchor, covers the whole file",
+                self.name,
+                self.layer,
+                self.mode,
+                SUSPICION_VERIFIED,
+                PROVENANCE_WEIGHT,
+                "PAdES signature verified: intact, chains to a pinned trust anchor, covers the whole "
+                f"file, certificate not revoked{ts_note}",
                 measurements=measurements,
             )
 
-        # Present but invalid: forged chain, appended bytes, or broken digest -> active tamper evidence.
+        # Present but invalid: forged chain, appended bytes, broken digest, or revoked cert -> tamper.
         reasons = []
         for s in per_sig:
-            if not s["trusted"]:
+            if s["revoked"]:
+                reasons.append(f"sig {s['index']}: signing certificate is REVOKED (CRL/OCSP)")
+            elif not s["trusted"]:
                 reasons.append(f"sig {s['index']}: chain does not reach a pinned anchor")
             elif not s["intact"] or not s["valid"]:
                 reasons.append(f"sig {s['index']}: cryptographic digest/signature invalid")
@@ -240,8 +366,11 @@ class PadesSignatureAnalyzer:
                 )
         detail = "; ".join(reasons) or "signature present but did not verify"
         return LayerSignal.valid(
-            self.name, self.layer, self.mode,
-            SUSPICION_TAMPERED, PROVENANCE_WEIGHT,
+            self.name,
+            self.layer,
+            self.mode,
+            SUSPICION_TAMPERED,
+            PROVENANCE_WEIGHT,
             f"PAdES signature INVALID — tampering evidence ({detail})",
             measurements=measurements,
         )
@@ -316,9 +445,7 @@ class C2paProvenanceAnalyzer:
 
     def analyze(self, ctx: AnalysisContext) -> LayerSignal:
         if not ctx.file_bytes:
-            return LayerSignal.not_evaluated(
-                self.name, self.layer, self.mode, "no file bytes to verify"
-            )
+            return LayerSignal.not_evaluated(self.name, self.layer, self.mode, "no file bytes to verify")
         mime = self._sniff_mime(ctx.file_bytes)
         if mime is None:
             return LayerSignal.not_evaluated(
@@ -328,9 +455,7 @@ class C2paProvenanceAnalyzer:
             return self._analyze(ctx, mime)
         except Exception as exc:  # noqa: BLE001 — fail-closed boundary (§4)
             logger.exception("C2PA verification raised unexpectedly")
-            return LayerSignal.error(
-                self.name, self.layer, self.mode, f"C2PA verification failed: {exc!r}"
-            )
+            return LayerSignal.error(self.name, self.layer, self.mode, f"C2PA verification failed: {exc!r}")
 
     def _analyze(self, ctx: AnalysisContext, mime: str) -> LayerSignal:
         import io
@@ -341,15 +466,19 @@ class C2paProvenanceAnalyzer:
         if not anchor_pems:
             # Fail-closed: an unpinned manifest is the documented self-signed exploit (§10).
             return LayerSignal.error(
-                self.name, self.layer, self.mode,
+                self.name,
+                self.layer,
+                self.mode,
                 "no pinned C2PA trust anchors — refusing to validate an unpinned manifest",
             )
 
         # Pin the trust list and require cert-anchor verification (BUILD-MANIFEST cop-out guard).
-        settings_obj = Settings.from_dict({
-            "verify": {"verify_trust": True, "verify_cert_anchors": True},
-            "trust": {"trust_anchors": "\n".join(anchor_pems)},
-        })
+        settings_obj = Settings.from_dict(
+            {
+                "verify": {"verify_trust": True, "verify_cert_anchors": True},
+                "trust": {"trust_anchors": "\n".join(anchor_pems)},
+            }
+        )
         c2pa_ctx = Context(settings=settings_obj)
 
         try:
@@ -360,16 +489,22 @@ class C2paProvenanceAnalyzer:
             if kind == "absent":
                 # No manifest at all -> route to Tier-2 forensics. Absence is never an auto-pass.
                 return LayerSignal.not_evaluated(
-                    self.name, self.layer, self.mode,
+                    self.name,
+                    self.layer,
+                    self.mode,
                     "no C2PA manifest present — routing to forensic fallback",
-                    provenance=PROV_ABSENT, method="C2PA",
+                    provenance=PROV_ABSENT,
+                    method="C2PA",
                 )
             if kind == "invalid":
                 # A manifest IS present and its signature/chain/assertions failed -> tamper evidence.
                 logger.info("C2PA manifest present but validation failed: %r", exc)
                 return LayerSignal.valid(
-                    self.name, self.layer, self.mode,
-                    SUSPICION_TAMPERED, PROVENANCE_WEIGHT,
+                    self.name,
+                    self.layer,
+                    self.mode,
+                    SUSPICION_TAMPERED,
+                    PROVENANCE_WEIGHT,
                     f"C2PA manifest present but failed validation — tampering evidence ({exc!r})",
                     measurements={"provenance": PROV_TAMPERED, "method": "C2PA", "error": repr(exc)},
                 )
@@ -378,7 +513,9 @@ class C2paProvenanceAnalyzer:
             # ERROR (-> human REVIEW), never an unearned "tampered" verdict and never a pass.
             logger.info("C2PA path could not process the asset: %r", exc)
             return LayerSignal.error(
-                self.name, self.layer, self.mode,
+                self.name,
+                self.layer,
+                self.mode,
                 f"C2PA could not process the image (corrupt/unsupported asset): {exc!r}",
             )
 
@@ -395,16 +532,22 @@ class C2paProvenanceAnalyzer:
         if verified:
             ctx.shared["provenance_verified"] = True
             return LayerSignal.valid(
-                self.name, self.layer, self.mode,
-                SUSPICION_VERIFIED, PROVENANCE_WEIGHT,
+                self.name,
+                self.layer,
+                self.mode,
+                SUSPICION_VERIFIED,
+                PROVENANCE_WEIGHT,
                 "C2PA manifest verified: signature valid and chains to a pinned trust anchor",
                 measurements=measurements,
             )
 
         # Present but not trusted (self-signed / untrusted chain / hard-binding mismatch).
         return LayerSignal.valid(
-            self.name, self.layer, self.mode,
-            SUSPICION_TAMPERED, PROVENANCE_WEIGHT,
+            self.name,
+            self.layer,
+            self.mode,
+            SUSPICION_TAMPERED,
+            PROVENANCE_WEIGHT,
             f"C2PA manifest present but not trusted (state={state_str}) — "
             "self-signed/unpinned manifest is the documented exploit; flagged",
             measurements=measurements,
@@ -428,10 +571,9 @@ class C2paProvenanceAnalyzer:
         is *unreadable* and resolves to ERROR. Calling an unparseable upload "tampered" would be a
         §3.1 honesty violation (claiming a detection the analysis did not actually establish).
         """
+
         def _kinds(*names: str) -> tuple[type, ...]:
-            return tuple(
-                t for t in (getattr(c2pa_error_cls, n, None) for n in names) if isinstance(t, type)
-            )
+            return tuple(t for t in (getattr(c2pa_error_cls, n, None) for n in names) if isinstance(t, type))
 
         if isinstance(exc, _kinds("ManifestNotFound")):
             return "absent"

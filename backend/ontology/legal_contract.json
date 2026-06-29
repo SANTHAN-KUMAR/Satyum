@@ -1,0 +1,168 @@
+{
+  "schema_version": "1.0",
+  "domain": "legal_contract",
+  "extends": "_shared.json",
+  "depth": "real_but_scoped",
+  "description": "Legal/contract rulebook (loan agreements, sale agreements, lease agreements, generic contracts). Real ontology + deterministic structural axioms (amount words=figures, term arithmetic, party-name consistency, schedule references, page/execution completeness). Semantic clause-conflict detection is out of scope for the deterministic pack and routes to human review. Layer-4 axioms + Layer-5 anomalies + Layer-6 bridges.",
+
+  "document_types": {
+    "LOAN_AGREEMENT": { "label": "Loan agreement", "primary": true },
+    "SALE_AGREEMENT": { "label": "Agreement to sell" },
+    "LEASE_AGREEMENT": { "label": "Lease / rent agreement" },
+    "GUARANTEE_DEED": { "label": "Guarantee deed", "scoped": true },
+    "GENERIC_CONTRACT": { "label": "Generic contract" }
+  },
+
+  "enums": {
+    "AgreementType": ["loan", "sale", "lease", "guarantee", "generic"],
+    "LegalRole": ["lender", "borrower", "co_borrower", "guarantor", "lessor", "lessee", "buyer", "seller", "witness"],
+    "TermKind": ["principal", "emi", "rent", "deposit", "penalty", "processing_fee", "interest"],
+    "Frequency": ["one_time", "monthly", "quarterly", "annual"]
+  },
+
+  "entities": {
+    "Agreement": {
+      "extends": "DocumentEnvelope",
+      "fields": {
+        "agreement_type": { "type": "AgreementType", "required": true },
+        "effective_date": { "type": "Date" },
+        "term": { "type": "Duration", "cardinality": "0..1" },
+        "end_date": { "type": "Date", "cardinality": "0..1" },
+        "consideration": { "type": "Money", "cardinality": "0..1" },
+        "consideration_in_words": { "type": "Text", "cardinality": "0..1" },
+        "interest_rate": { "type": "Percentage", "cardinality": "0..1" },
+        "stamp_value": { "type": "Money", "cardinality": "0..1" },
+        "printed_page_count": { "type": "Count", "cardinality": "0..1" }
+      }
+    },
+    "Party": {
+      "fields": {
+        "name": { "type": "PersonName", "required": true, "identity": true },
+        "role": { "type": "LegalRole", "required": true },
+        "pan": { "type": "PAN", "cardinality": "0..1", "identity": true },
+        "aadhaar": { "type": "Aadhaar", "cardinality": "0..1", "identity": true },
+        "address": { "type": "Address", "cardinality": "0..1", "identity": true },
+        "appears_in": { "type": "Text", "cardinality": "0..*", "note": "sections the name occurs in: recital | body | signature | schedule" }
+      }
+    },
+    "MonetaryTerm": {
+      "fields": {
+        "kind": { "type": "TermKind", "required": true },
+        "amount": { "type": "Money" },
+        "amount_in_words": { "type": "Text", "cardinality": "0..1" },
+        "frequency": { "type": "Frequency", "cardinality": "0..1" }
+      }
+    },
+    "Schedule": {
+      "fields": {
+        "label": { "type": "Text", "required": true, "identity": true },
+        "title": { "type": "Text", "cardinality": "0..1" },
+        "present": { "type": "Boolean" },
+        "property_id": { "type": "Text", "cardinality": "0..1", "note": "for loan/collateral schedules; bridges to land_title" }
+      }
+    },
+    "Clause": {
+      "fields": {
+        "number": { "type": "Text" },
+        "heading": { "type": "Text", "cardinality": "0..1" },
+        "refers_to": { "type": "Text", "cardinality": "0..*" }
+      }
+    },
+    "ExecutionBlock": {
+      "fields": {
+        "signatures": { "type": "PersonName", "cardinality": "1..*", "role": "signatory" },
+        "witnesses": { "type": "PersonName", "cardinality": "0..*", "role": "witness" },
+        "execution_date": { "type": "Date", "cardinality": "0..1" },
+        "notarized": { "type": "Boolean", "cardinality": "0..1" },
+        "stamp_present": { "type": "Boolean", "cardinality": "0..1" }
+      }
+    }
+  },
+
+  "rules": [
+    {
+      "id": "G1", "name": "amount_words_equals_figures", "title": "Consideration in words equals the figures",
+      "rationale": "the classic deterministic tamper check: an edited figure rarely matches the words form.",
+      "applies_when": { "document_types": ["LOAN_AGREEMENT", "SALE_AGREEMENT", "LEASE_AGREEMENT", "GENERIC_CONTRACT"], "requires": ["Agreement.consideration", "Agreement.consideration_in_words"] },
+      "check": "words_equal_figures",
+      "bind": { "words_field": { "entity": "Agreement", "field": "consideration_in_words" }, "figures_field": { "entity": "Agreement", "field": "consideration" }, "tolerance_ref": "arithmetic_abs_tolerance" },
+      "on_fail": { "status": "FAIL", "severity_ref": "hard_tamper", "localize": { "entity": "Agreement", "field": "consideration" }, "reason": "amount in words '{words}' ({parsed}) != figures {figures}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "words or figures form absent" },
+      "also_applies_per": { "entity": "MonetaryTerm", "words_field": "amount_in_words", "figures_field": "amount" }
+    },
+    {
+      "id": "G2", "name": "term_arithmetic", "title": "Effective date + term = end date",
+      "applies_when": { "document_types": ["LOAN_AGREEMENT", "LEASE_AGREEMENT"], "requires": ["Agreement.effective_date", "Agreement.term", "Agreement.end_date"] },
+      "check": "date_offset_equals",
+      "bind": { "start": { "entity": "Agreement", "field": "effective_date" }, "offset": { "entity": "Agreement", "field": "term" }, "end": { "entity": "Agreement", "field": "end_date" }, "tolerance_days": 1 },
+      "on_fail": { "status": "FAIL", "severity_ref": "structural", "localize": { "entity": "Agreement", "field": "end_date" }, "reason": "effective {start} + term {offset} = {expected} != end date {end}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "effective date, term, or end date absent" }
+    },
+    {
+      "id": "G3", "name": "party_name_consistency", "title": "Each party's name is consistent across all sections",
+      "rationale": "a name that differs between the recital, signature, and schedule suggests a spliced/edited document.",
+      "applies_when": { "document_types": ["LOAN_AGREEMENT", "SALE_AGREEMENT", "LEASE_AGREEMENT", "GUARANTEE_DEED"], "requires": ["Party.name"], "min": { "Party.appears_in": 2 } },
+      "check": "all_equal_fuzzy",
+      "bind": { "field_set": { "entity": "Party", "field": "name", "across": "appears_in" }, "min_ratio": 0.90 },
+      "on_fail": { "status": "FAIL", "severity_ref": "structural", "localize": { "entity": "Party", "field": "name" }, "reason": "party name differs across sections: {values}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "party name occurs in fewer than 2 sections" }
+    },
+    {
+      "id": "G4", "name": "schedule_references_resolve", "title": "Every referenced schedule/annexure exists",
+      "applies_when": { "document_types": ["LOAN_AGREEMENT", "SALE_AGREEMENT", "LEASE_AGREEMENT", "GENERIC_CONTRACT"], "requires": ["Clause.refers_to"] },
+      "check": "references_resolve",
+      "bind": { "ref_field": { "entity": "Clause", "field": "refers_to" }, "target_entity": "Schedule", "target_key": "label" },
+      "on_fail": { "status": "FAIL", "severity_ref": "structural", "reason": "referenced schedule(s) missing: {missing}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "no schedule references found" }
+    },
+    {
+      "id": "G5", "name": "page_completeness", "title": "Pages are complete and sequential",
+      "rationale": "missing or out-of-order pages indicate removal/insertion.",
+      "applies_when": { "document_types": ["LOAN_AGREEMENT", "SALE_AGREEMENT", "LEASE_AGREEMENT", "GUARANTEE_DEED", "GENERIC_CONTRACT"], "requires": ["Agreement.printed_page_count"] },
+      "check": "sequence_complete",
+      "bind": { "field": { "entity": "DocumentEnvelope", "field": "printed_page_numbers", "series": true }, "start": 1, "expected_count": { "entity": "Agreement", "field": "printed_page_count" } },
+      "on_fail": { "status": "FAIL", "severity_ref": "structural", "reason": "page sequence incomplete: {detail}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "printed page numbers not detected" }
+    },
+    {
+      "id": "G6", "name": "execution_completeness", "title": "Required signatures and witnesses are present",
+      "rationale": "a registrable/enforceable instrument needs the parties' signatures and (typically) two witnesses.",
+      "applies_when": { "document_types": ["LOAN_AGREEMENT", "SALE_AGREEMENT", "LEASE_AGREEMENT", "GUARANTEE_DEED"], "requires": ["ExecutionBlock"] },
+      "check": "presence_count", "multi": true,
+      "bindings": [
+        { "target": { "entity": "ExecutionBlock", "field": "signatures" }, "min_per_party": true, "reason": "missing signature for one or more parties" },
+        { "target": { "entity": "ExecutionBlock", "field": "witnesses" }, "min": 2, "reason": "fewer than 2 witnesses" },
+        { "target": { "entity": "ExecutionBlock", "field": "execution_date" }, "min": 1, "reason": "execution undated" }
+      ],
+      "on_fail": { "status": "FAIL", "severity_ref": "structural", "reason": "{reason}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "execution block not detected" }
+    },
+    {
+      "id": "G7", "name": "emi_consistency", "title": "EMI consistent with principal, rate, and term",
+      "applies_when": { "document_types": ["LOAN_AGREEMENT"], "requires": ["MonetaryTerm[kind=principal]", "Agreement.interest_rate", "Agreement.term", "MonetaryTerm[kind=emi]"] },
+      "check": "formula",
+      "bind": { "function": "amortize_emi", "inputs": { "principal": { "entity": "MonetaryTerm", "field": "amount", "where": { "kind": "principal" } }, "annual_rate": { "entity": "Agreement", "field": "interest_rate" }, "term_months": { "entity": "Agreement", "field": "term" } }, "observed": { "entity": "MonetaryTerm", "field": "amount", "where": { "kind": "emi" } }, "tolerance": 1.0 },
+      "on_fail": { "status": "FAIL", "severity_ref": "soft", "localize": { "entity": "MonetaryTerm", "field": "amount", "where": { "kind": "emi" } }, "reason": "stated EMI {observed} != computed {expected} for P={principal}, r={annual_rate}, n={term_months}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "principal / rate / term / EMI not all present" }
+    }
+  ],
+
+  "anomalies": [
+    { "id": "A_LEGAL_1", "name": "reused_agreement_template", "title": "Same agreement reused across applicants", "via": "resubmission_memory (pHash + party/consideration signature)", "severity_ref": "review_only", "review_only": true },
+    { "id": "A_LEGAL_2", "name": "abnormal_missing_blocks", "title": "Unusually missing standard clauses/blocks", "heuristic": "expected clause headings for the agreement_type absent at a rate above threshold", "severity_ref": "review_only", "review_only": true, "depends_on": "clause-heading reference set per agreement_type", "status_when_reference_absent": "NOT_EVALUATED" }
+  ],
+
+  "corroboration": [
+    { "id": "X_PARTY_ID_LEGAL", "name": "party_identity", "title": "Agreement parties agree with KYC across the bundle", "anchors": ["name", "pan", "aadhaar", "address"], "mismatch": { "status": "REVIEW_OR_REJECT", "severity_source": "cross_document._FIELD_SEVERITY" } },
+    { "id": "X_CONSIDERATION", "name": "consideration_agreement", "title": "Agreement consideration = deed consideration = payment trail", "fields": [ { "entity": "Agreement", "field": "consideration" }, { "domain": "land_title", "entity": "SaleDeed", "field": "consideration" }, { "domain": "financial", "entity": "Transaction", "field": "debit", "filter": "to seller" } ], "match": "numeric_tolerance", "mismatch": { "status": "REVIEW", "severity_ref": "soft" } },
+    { "id": "X_COLLATERAL_LEGAL", "name": "collateral_match", "title": "Loan schedule property = title document property", "fields": [ { "entity": "Schedule", "field": "property_id" }, { "domain": "land_title", "entity": "PropertyParcel", "field": "survey_number" } ], "match": "exact_normalized", "mismatch": { "status": "REJECT", "severity_ref": "hard_mismatch" } },
+    { "id": "X_INCOME_LEGAL", "name": "declared_income", "title": "Loan-application declared income = observed financial income", "fields": [ { "external": "application.declared_income" }, { "domain": "financial", "corroboration": "X_INCOME" } ], "match": "numeric_tolerance", "mismatch": { "status": "REVIEW", "severity_ref": "soft" } }
+  ],
+
+  "coverage_notes": {
+    "buildable_now": ["G1", "G2", "G3", "G4", "G5", "G6"],
+    "gated": { "G7": "amortization computed only when principal+rate+term+EMI all present -> else NOT_EVALUATED", "A_LEGAL_2": "needs a clause-heading reference set per agreement_type" },
+    "out_of_scope_for_deterministic": "Semantic clause-conflict (two clauses that logically contradict) routes to the human-review / rule-learning loop (ADR-004) — never faked by this pack.",
+    "honest_bound": "Structural/arithmetic consistency catches edits and incoherent drafts, not a fully self-consistent forged agreement; that residual is covered by provenance, resubmission memory, and corroboration."
+  }
+}

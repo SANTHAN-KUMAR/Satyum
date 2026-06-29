@@ -23,7 +23,7 @@ export default function App() {
         <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-100">Verify a document</h2>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-slate-400">
               Upload a financial statement, cross-check a document bundle, run a live capture, or
               preview the console layout.
             </p>
@@ -44,7 +44,7 @@ export default function App() {
         </div>
       </main>
 
-      <footer className="border-t border-hairline px-4 py-4 text-center text-xs text-slate-600 sm:px-6">
+      <footer className="border-t border-hairline px-4 py-4 text-center text-xs text-slate-500 sm:px-6">
         Satyum — deterministic, auditable, fail-closed. No document content or camera frames are
         persisted.
       </footer>

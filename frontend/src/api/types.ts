@@ -102,6 +102,95 @@ export interface LayerSignal {
   producing_mode: Mode;
 }
 
+// ---------------------------------------------------------------------------------------------
+// v2 progressive-evidence types (ADR-004) — additive, all optional on TrustScore.
+// Absent in v1 responses; every component that reads these guards on `?.` / `?? []`.
+// Mirrors backend/app/contracts.py v2 additions (keep in lockstep, CLAUDE.md §11).
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Extraction provenance for a single Claim (ADR-004 §5 VLM trust boundary).
+ * corroborating_read = what deterministic OCR independently read; null = OCR not yet run.
+ * cross_read_agree: true = consensus; false = DISAGREED → claim status = "DISAGREED";
+ *                   null = OCR not yet run.
+ */
+export interface ClaimProvenance {
+  doc_id: string;
+  page: number;
+  bbox: BBox | null;
+  confidence: number; // 0..1 VLM extraction confidence
+  source: "vlm" | "ocr";
+  corroborating_read: string | null;
+  cross_read_agree: boolean | null;
+}
+
+/** One canonical claim in the claim graph (Layer 3, ADR-004 §3). */
+export interface Claim {
+  subject: string;   // e.g. "bank_statement_1"
+  predicate: string; // e.g. "running_balance[row=7]"
+  value: string;
+  value_type: "MONEY" | "DATE" | "NAME" | "ID" | "NUMBER" | "TEXT";
+  provenance: ClaimProvenance;
+  /** VERIFIED = VLM + OCR agree · DISAGREED = cross-read mismatch → NOT_EVALUATED verdict */
+  status: "VERIFIED" | "NOT_EVALUATED" | "DISAGREED";
+}
+
+/** Per-rule result from a deterministic rule pack (Layer 4, ADR-004 §3). */
+export type RuleStatus =
+  | "PASS"
+  | "FAIL"
+  | "UNKNOWN"
+  | "NOT_APPLICABLE"
+  | "NOT_EVALUATED";
+
+export interface RuleResult {
+  rule_id: string;
+  description: string;
+  status: RuleStatus;
+  reason: string;
+  claims_used: string[]; // predicate refs into the claim graph that this rule consumed
+}
+
+/** One domain's rule pack output (financial / land / legal). */
+export interface RulePackResult {
+  domain: "financial" | "land" | "legal";
+  rules: RuleResult[];
+}
+
+/** Layer 0 — evidence sufficiency classification (what confidence the submission can achieve). */
+export type EvidenceLevel = "single-document" | "case-context" | "corroborated";
+
+export interface EvidenceSufficiency {
+  level: EvidenceLevel;
+  doc_count: number;
+  source_types: string[]; // e.g. ["pdf", "salary_slip", "form16"]
+  achievable_confidence: "LOW" | "MEDIUM" | "HIGH";
+}
+
+/**
+ * One soft signal from Layer 5 anomaly intelligence (ADR-004 §3).
+ * verdict_impact is always "REVIEW" — anomaly signals never harden to REJECT.
+ * is_ml=true → the optional ML lane (labeled "experimental"); is_ml=false → deterministic stats.
+ */
+export interface AnomalySignal {
+  kind: string;
+  reason: string;
+  verdict_impact: "REVIEW";
+  is_ml: boolean;
+  ml_label?: "experimental";
+}
+
+/** Status for one layer in the verification waterfall (shown in PipelineWaterfall). */
+export type PipelineStepStatus = "PASS" | "FAIL" | "SKIP" | "NOT_EVALUATED" | "ERROR";
+
+export interface LayerPipelineStatus {
+  layer: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  name: string;
+  ran: boolean;
+  status: PipelineStepStatus;
+  tier: 1 | 2 | 3 | null; // which verification tier this layer belongs to; null = cross-tier
+}
+
 /**
  * app/contracts.py :: TrustScore — the published verdict the bank's core consumes,
  * returned by POST /api/verify. `.evidence_pack` is the embedded EvidencePack above.
@@ -117,6 +206,12 @@ export interface TrustScore {
   signals: LayerSignal[];
   evidence_pack: EvidencePack;
   fail_closed: boolean;
+  // v2 optional fields — absent in v1 responses; all consumers guard with `?.`
+  evidence_sufficiency?: EvidenceSufficiency;
+  claim_graph?: Claim[];
+  rule_pack_results?: RulePackResult[];
+  anomaly_signals?: AnomalySignal[];
+  pipeline_layers?: LayerPipelineStatus[];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -167,11 +262,12 @@ export interface BundleTrustScore {
 // ---------------------------------------------------------------------------------------------
 // Live-capture (WebSocket /ws/verify) protocol — Tier-3 active 3D challenge.
 // Mirrors architecture/BUILD-MANIFEST.md "Active server-randomized 3D challenge": the server
-// issues an unpredictable just-in-time tilt/rotate/proximity command and verifies the tracked
-// document motion matches it via per-frame homography. The frontend streams frames and renders
-// the active-challenge instruction + live per-tier status. Until the backend /ws/verify route
-// exists, the client connects honestly and reports the real connection state — it never fabricates
-// challenge data (CLAUDE.md §3.1, §3.4).
+// issues an unpredictable just-in-time tilt command and verifies the tracked document motion matches
+// it via homography. The frontend streams frames and renders the active-challenge instruction + live
+// per-tier status. The backend route (backend/app/routes/verify.py :: verify_camera) implements
+// EXACTLY this contract — they are kept field-for-field in lockstep (CLAUDE.md §11). If the route is
+// unreachable, the client connects honestly and reports the real state, never fabricating challenge
+// data (CLAUDE.md §3.1, §3.4).
 // ---------------------------------------------------------------------------------------------
 
 export type ChallengeKind = "tilt-left" | "tilt-right" | "tilt-up" | "tilt-down" | "rotate-cw" | "rotate-ccw" | "move-closer" | "move-away";
@@ -181,8 +277,12 @@ export interface ServerChallengeMessage {
   type: "challenge";
   challenge_id: string;
   kind: ChallengeKind;
-  instruction: string; // human-readable command, e.g. "Tilt the document to the left"
+  instruction: string; // human-readable command, e.g. "Tilt the document's left edge toward the camera"
   expires_at_ms: number; // epoch ms; the challenge nonce is time-bounded (anti-replay)
+  // The authoritative command the analyzer verifies (axis + magnitude; direction in `kind` is a
+  // human cue, not separately verified — see verify.py). Present on the wire; not required by the UI.
+  axis?: "x" | "y";
+  magnitude_deg?: number;
 }
 
 /** Server -> client: live per-tier / per-signal status as the pipeline runs on streamed frames. */

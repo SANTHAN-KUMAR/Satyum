@@ -1,3 +1,4 @@
+import { FileText, ScanSearch } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { TamperEvidenceRegion } from "@/api/types";
 import { Panel } from "@/components/primitives/Panel";
@@ -48,14 +49,12 @@ export function DocumentPreview({ previewUrl, isPdf, fileName, regions }: Docume
       <figure className="space-y-2" aria-labelledby={titleId}>
         <div className="relative overflow-hidden rounded-lg border border-hairline bg-black/40">
           {isPdf || !previewUrl ? (
-            <div className="flex aspect-[3/4] flex-col items-center justify-center gap-2 p-6 text-center">
-              <span className="text-3xl" aria-hidden="true">
-                ▤
-              </span>
+            <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 p-6 text-center">
+              <FileText size={40} strokeWidth={1.5} className="text-slate-500" aria-hidden="true" />
               <p className="text-sm font-medium text-slate-300">{fileName}</p>
               <p className="max-w-xs text-xs text-slate-500">
                 {isPdf
-                  ? "PDF intake — page rendering is handled server-side; tamper regions below reference the analysed page coordinates."
+                  ? "PDF intake — page rendering is handled server-side; the flagged regions below reference the analysed page."
                   : "No inline preview available for this intake."}
               </p>
               {hasOverlay && (
@@ -63,11 +62,17 @@ export function DocumentPreview({ previewUrl, isPdf, fileName, regions }: Docume
                   {regions.map((r, i) => (
                     <li
                       key={`${r.source}-${i}`}
-                      className="rounded border border-verdict-rejected/40 bg-verdict-rejected-soft px-2 py-1 text-xs text-slate-300"
+                      className="flex items-start gap-2 rounded border border-verdict-rejected/40 bg-verdict-rejected-soft px-2 py-1.5 text-xs text-slate-300"
                     >
-                      <span className="font-mono text-verdict-rejected">[{r.bbox.join(", ")}]</span>{" "}
-                      {r.label}{" "}
-                      <span className="text-slate-500">· {r.source}</span>
+                      <ScanSearch
+                        size={13}
+                        className="mt-0.5 shrink-0 text-verdict-rejected"
+                        aria-hidden="true"
+                      />
+                      <span>
+                        <span className="font-medium text-slate-200">{r.label}</span>
+                        <span className="text-slate-500"> · detector: {r.source}</span>
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -145,9 +150,11 @@ export function DocumentPreview({ previewUrl, isPdf, fileName, regions }: Docume
                     "border-verdict-rejected/30 bg-verdict-rejected-soft text-slate-300",
                   )}
                 >
-                  <span className="mt-px font-mono text-verdict-rejected" aria-hidden="true">
-                    ▣
-                  </span>
+                  <ScanSearch
+                    size={13}
+                    className="mt-0.5 shrink-0 text-verdict-rejected"
+                    aria-hidden="true"
+                  />
                   <span>
                     <span className="font-medium text-slate-200">{r.label}</span>
                     <span className="text-slate-500">

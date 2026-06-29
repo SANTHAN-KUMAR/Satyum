@@ -1,3 +1,4 @@
+import { Clock } from "lucide-react";
 import type { PendingSignal } from "@/api/types";
 import { Panel } from "@/components/primitives/Panel";
 import { Tag } from "@/components/primitives/Tag";
@@ -14,7 +15,7 @@ interface PendingListProps {
 export function PendingList({ pending }: PendingListProps) {
   if (pending.length === 0) {
     return (
-      <Panel title="Not evaluated (pending)" aside="0">
+      <Panel title="Not evaluated (pending)" icon={Clock} aside="0">
         <p className="text-sm text-slate-400">
           Every applicable check was evaluated — nothing gated for this intake.
         </p>
@@ -23,7 +24,7 @@ export function PendingList({ pending }: PendingListProps) {
   }
 
   return (
-    <Panel title="Not evaluated (pending)" aside={`${pending.length} gated`}>
+    <Panel title="Not evaluated (pending)" icon={Clock} aside={`${pending.length} gated`}>
       <ul className="space-y-2.5">
         {pending.map((p) => (
           <li

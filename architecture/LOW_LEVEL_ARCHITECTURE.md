@@ -1,4 +1,8 @@
-# 🔐 Satyum — Low-Level Architecture
+# Satyum — Low-Level Architecture
+
+> **SUPERSEDED** — This document describes the v1 layer decomposition. The authoritative design is
+> [ADR-004 — v2 progressive evidence architecture](ADR-004-v2-progressive-evidence-architecture.md).
+> Kept for historical context only.
 
 > **SuRaksha Cyber Hackathon 2.0 | Canara Bank**
 > Layer-by-Layer Technical Deep Dive

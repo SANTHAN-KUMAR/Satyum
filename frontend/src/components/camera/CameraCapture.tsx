@@ -1,3 +1,13 @@
+import {
+  AlertTriangle,
+  Ban,
+  Camera,
+  CameraOff,
+  MonitorOff,
+  Play,
+  ScanLine,
+  Square,
+} from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useCamera } from "@/hooks/useCamera";
 import { useVerifySocket } from "@/hooks/useVerifysocket";
@@ -72,6 +82,7 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
     <div className="space-y-4">
       <Panel
         title="Live capture · Tier 3"
+        icon={ScanLine}
         aside={<ConnectionBadge state={socket.state} />}
         bodyClassName="space-y-4"
       >
@@ -102,7 +113,7 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
               )}
             </>
           ) : (
-            <div className="aspect-video w-full">
+            <div className="grid aspect-video w-full place-items-center p-4">
               <CameraPlaceholder state={camera.state} error={camera.error} onStart={startSession} />
             </div>
           )}
@@ -115,16 +126,18 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
               type="button"
               onClick={startSession}
               disabled={camera.state === "requesting" || camera.state === "unsupported"}
-              className="rounded-md border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-md border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
+              <Play size={15} aria-hidden="true" />
               Start live session
             </button>
           ) : (
             <button
               type="button"
               onClick={stopSession}
-              className="rounded-md border border-verdict-rejected/50 bg-verdict-rejected-soft px-4 py-2 text-sm font-semibold text-verdict-rejected hover:bg-verdict-rejected/20"
+              className="inline-flex items-center gap-2 rounded-md border border-verdict-rejected/50 bg-verdict-rejected-soft px-4 py-2 text-sm font-semibold text-verdict-rejected hover:bg-verdict-rejected/20"
             >
+              <Square size={14} aria-hidden="true" />
               End session
             </button>
           )}
@@ -166,7 +179,7 @@ function CameraPlaceholder({ state, error, onStart }: PlaceholderProps) {
         tone="error"
         title="Camera not available in this context"
         detail="getUserMedia requires a secure origin (https or localhost) and a browser with camera support."
-        icon={<span className="text-2xl">⛔</span>}
+        icon={<MonitorOff size={28} className="text-verdict-rejected" />}
       />
     );
   }
@@ -176,7 +189,7 @@ function CameraPlaceholder({ state, error, onStart }: PlaceholderProps) {
         tone="error"
         title="Camera permission denied"
         detail={error ?? "Grant camera access in your browser's site settings, then start again."}
-        icon={<span className="text-2xl">🚫</span>}
+        icon={<Ban size={28} className="text-verdict-rejected" />}
         action={
           <button
             type="button"
@@ -195,7 +208,7 @@ function CameraPlaceholder({ state, error, onStart }: PlaceholderProps) {
         tone="error"
         title="No camera found"
         detail={error ?? "Connect a camera and try again."}
-        icon={<span className="text-2xl">📷</span>}
+        icon={<CameraOff size={28} className="text-verdict-rejected" />}
       />
     );
   }
@@ -205,7 +218,7 @@ function CameraPlaceholder({ state, error, onStart }: PlaceholderProps) {
         tone="error"
         title="Camera could not start"
         detail={error ?? "An unexpected camera error occurred."}
-        icon={<span className="text-2xl">⚠</span>}
+        icon={<AlertTriangle size={28} className="text-verdict-rejected" />}
         action={
           <button
             type="button"
@@ -224,7 +237,7 @@ function CameraPlaceholder({ state, error, onStart }: PlaceholderProps) {
       tone="info"
       title="Live capture is off"
       detail="Start a session to open the camera and stream to the verification pipeline."
-      icon={<span className="text-2xl">▶</span>}
+      icon={<Camera size={28} className="text-accent" />}
       action={
         <button
           type="button"
