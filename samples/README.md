@@ -2,8 +2,10 @@
 
 A drag-and-drop kit for evaluating Satyum. **Every file here is fully synthetic** (no real customer
 data) and reproducible from [`generate.py`](generate.py) — nothing is a hand-tuned fixture. Each
-artifact targets a specific detector and has a **documented expected verdict** you can confirm live in
-the evidence console or via the API.
+artifact targets a specific layer of the v2 progressive-evidence pipeline
+([ADR-004](../architecture/ADR-004-v2-progressive-evidence-architecture.md)) — provenance, the
+deterministic financial rule pack, cross-source corroboration — and has a **documented expected
+verdict** you can confirm live in the evidence console or via the API.
 
 > Regenerate at any time: `python samples/generate.py`
 > The demo CA's **private key is never written** — only the public root (`trust/demo_ca_root.pem`),
@@ -30,7 +32,7 @@ chain) — which is itself the correct, safe behaviour.
 
 ## What each file demonstrates (and its expected verdict)
 
-### `pdfs/` — Tier-1, cryptographic signature verification (PAdES → CCA-India-style PKI)
+### `pdfs/` — Layer 1, cryptographic signature verification (PAdES → CCA-India-style PKI)
 
 | File | Expected verdict | What it proves |
 |---|---|---|
@@ -39,14 +41,31 @@ chain) — which is itself the correct, safe behaviour.
 | `appended_after_signature.pdf` | ❌ **REJECTED** · tampered | The PAdES **shadow attack**: bytes appended after the signed `/ByteRange` → coverage no longer spans the file. Caught. |
 | `unsigned.pdf` | ⚠️ **REVIEW** · forensic-fallback | No signature → falls through to forensics; clean wrapper but content unverifiable → REVIEW, never an unearned pass. |
 
-### `statements/` — Tier-2, arithmetic / cross-field consistency (the primary tamper signal)
+### `statements/` — Layer 4, the deterministic financial rule pack (arithmetic / cross-field consistency — the primary tamper signal)
 
 | File | Expected verdict | What it proves |
 |---|---|---|
 | `genuine_statement.png` | ✅ **APPROVED** | Every running-balance / total invariant reconciles. |
 | `tampered_statement.png` | ❌ **REJECTED** | A single balance figure was inflated (`15,000 → 16,000`); the running-balance chain breaks and the exact row is flagged. Open *"Show analysis detail"* on the arithmetic signal to see the broken invariant. |
 
-### `bundle_consistent/` & `bundle_mismatch/` — the cross-document identity graph (ADR-003 #3)
+### `hard/` — realistic, *convincing* adversarial documents
+
+The files above prove the engine **logic** on clean toy renders. The `hard/` corpus proves the same
+deterministic rule pack and Layer-1 verification on documents that **look like real bank artifacts** —
+a professional multi-transaction statement (branded header, ₹ formatting, a month of UPI/salary/rent
+activity) and a PAdES-signed **e-statement with visible content** — so a skeptical reviewer sees the
+system survive a forgery the eye would miss, not a cake-walk. Same reproducible generator, same
+numbers the suite asserts on
+([`backend/tests/test_hard_fixtures.py`](../backend/tests/test_hard_fixtures.py)).
+
+| File | Expected verdict | What it proves |
+|---|---|---|
+| `statement_genuine.png` | ✅ **APPROVED** (~100) | A realistic month-long statement whose running balance, totals, and net reconciliation all check out. |
+| `statement_tampered.png` | ❌ **REJECTED** (~47) | The **income-inflation forgery**: one salary credit is inflated `85,000 → 185,000` while the printed balances/totals stay genuine. Looks clean; breaks the running-balance chain **and** the credit total **and** the net reconciliation. The findings panel names the exact figures (expected ₹285,000.00 vs printed ₹185,000.00). |
+| `signed_statement_genuine.pdf` | ✅ **APPROVED** · source-verified (99) | The realistic statement rendered to a PDF and **PAdES-signed** by the demo root — Layer 1 verifies a document that visibly *is* a bank e-statement, not a blank page. (Needs `SATYUM_TRUST_ANCHOR_DIR`, as above.) |
+| `signed_statement_shadow_attacked.pdf` | ❌ **REJECTED** · tampered (5) | The same signed e-statement with a **post-signing incremental edit** — `/ByteRange` coverage breaks, so the shadow attack is caught on a document that otherwise looks legitimately signed. |
+
+### `bundle_consistent/` & `bundle_mismatch/` — Layer 6, cross-source corroboration / the identity graph (the ADR-003 #3 thesis, now [ADR-004 §3 Layer 6](../architecture/ADR-004-v2-progressive-evidence-architecture.md))
 
 Submit **both files in a folder together** on the **Document bundle** tab.
 

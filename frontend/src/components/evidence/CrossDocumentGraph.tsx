@@ -1,3 +1,5 @@
+import { AlertTriangle, CheckCircle2, Network, XCircle } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { CrossDocumentMeasurements, CrossFieldStatus, LayerSignal } from "@/api/types";
 import { Panel } from "@/components/primitives/Panel";
 import { cn } from "@/lib/cn";
@@ -26,21 +28,21 @@ const FIELD_LABEL: Record<string, string> = {
   dob: "Date of birth",
 };
 
-const STATUS_STYLE: Record<CrossFieldStatus, { label: string; chip: string; glyph: string }> = {
+const STATUS_STYLE: Record<CrossFieldStatus, { label: string; chip: string; Icon: LucideIcon }> = {
   agree: {
     label: "Agree",
     chip: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-    glyph: "✓",
+    Icon: CheckCircle2,
   },
   near: {
     label: "Possible OCR slip",
     chip: "border-verdict-review/40 bg-verdict-review-soft text-verdict-review",
-    glyph: "≈",
+    Icon: AlertTriangle,
   },
   disagree: {
     label: "Mismatch",
     chip: "border-verdict-rejected/40 bg-verdict-rejected-soft text-verdict-rejected",
-    glyph: "✕",
+    Icon: XCircle,
   },
 };
 
@@ -64,6 +66,7 @@ export function CrossDocumentGraph({ cross, documentLabels }: CrossDocumentGraph
   return (
     <Panel
       title="Cross-document identity graph"
+      icon={Network}
       aside={
         notEvaluated
           ? "not evaluated"
@@ -121,7 +124,7 @@ export function CrossDocumentGraph({ cross, documentLabels }: CrossDocumentGraph
                       style.chip,
                     )}
                   >
-                    <span aria-hidden="true">{style.glyph}</span>
+                    <style.Icon size={13} aria-hidden="true" />
                     {style.label}
                   </span>
                 </div>

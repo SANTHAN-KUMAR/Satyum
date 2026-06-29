@@ -11,9 +11,20 @@ def _sig_valid(name, suspicion, weight=0.4, layer=3, mode=Mode.FILE):
     return LayerSignal.valid(name, layer, mode, suspicion, weight, "x")
 
 
-def test_clean_forensics_approve():
-    # The substantive content signal (arithmetic) evaluated clean -> the content WAS assessed -> APPROVE.
+def test_clean_arithmetic_alone_is_review_not_approve():
+    # ADR-004 §7 #2: clean rules are necessary but NOT sufficient — a fully recomputed-and-reprinted
+    # forgery passes every arithmetic invariant. A lone unsigned document with no cross-source
+    # corroboration and no provenance is indeterminate -> REVIEW (fail-closed), never auto-APPROVE.
     ts = aggregate("s", Mode.FILE, [_sig_valid("arithmetic_consistency", 0.0)])
+    assert ts.verdict == Verdict.REVIEW and ts.fail_closed
+
+
+def test_clean_arithmetic_with_corroboration_approves():
+    # The sufficient path (§7 #2): substantive content AND cross-source corroboration -> APPROVE.
+    ts = aggregate("s", Mode.FILE, [
+        _sig_valid("arithmetic_consistency", 0.0),
+        _sig_valid("cross_document_consistency", 0.0, weight=0.5),
+    ])
     assert ts.verdict == Verdict.APPROVED and ts.trust_score >= 85
 
 
@@ -30,11 +41,12 @@ def test_clean_wrapper_without_content_assessment_is_review_not_approve():
     assert ts.verdict == Verdict.REVIEW and ts.fail_closed
     assert ts.trust_score <= 60  # gauge pulled to the REVIEW band, not a contradictory high score
 
-    # Discrimination: add a clean SUBSTANTIVE signal and the same wrapper-clean doc now APPROVES.
+    # Discrimination: add a clean SUBSTANTIVE signal AND cross-source corroboration -> the same
+    # wrapper-clean doc now APPROVES (§7 #2 — substantive content + corroboration is sufficient).
     approved = aggregate("s", Mode.FILE, [
         _sig_valid("pdf_structure_metadata", 0.0, weight=0.15),
-        _sig_valid("phash_resubmission", 0.0, weight=0.15),
         _sig_valid("arithmetic_consistency", 0.0, weight=0.40),
+        _sig_valid("cross_document_consistency", 0.0, weight=0.50),
     ])
     assert approved.verdict == Verdict.APPROVED
 

@@ -45,3 +45,11 @@ node_modules/
 Thumbs.db
 *.log
 *.swp
+
+# --- Generated Corpus Data ---
+samples/mass_corpus/
+samples/hard/
+652591331-Canara-Bank-Statement.pdf
+804153748-Statement.pdf
+aadhars/
+

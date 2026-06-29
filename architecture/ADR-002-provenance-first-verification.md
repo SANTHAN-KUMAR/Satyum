@@ -1,5 +1,7 @@
 # ADR-002 — Provenance-First Verification Waterfall
 
+> **Still in force.** Built on by [ADR-004](ADR-004-v2-progressive-evidence-architecture.md) (the v2 architecture of record). Mode-tagging / provenance-first / fail-closed carry into v2 unchanged.
+
 > **Status:** Accepted · 2026-06-27 · **evolves [ADR-001](ADR-001-dual-mode-and-signal-validity.md)**
 > **Grounded by:** [RESEARCH-001 — Industry Landscape](RESEARCH-001-industry-landscape.md) (cited web research)
 > **Scope:** Satyum — Canara Bank SuRaksha 2.0, Theme 1 (document anomaly detection for underwriting)

@@ -28,6 +28,13 @@ sys.path.insert(0, str(_BACKEND / "tests"))
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
+# Realistic "hard corpus" builders (professional statement + signed-statement PDF), shared with
+# backend/tests/test_hard_fixtures.py so the demo artifacts are the same ones the suite asserts on.
+from realistic_fixtures import (  # noqa: E402
+    render_realistic_statement,
+    statement_pdf_bytes,
+)
+
 # Real, test-asserted builders — the same code the suite proves discriminates.
 from test_ocr import (  # noqa: E402
     _GENUINE_ROWS,
@@ -80,6 +87,7 @@ def main(out_dir: str) -> None:
         "pdfs": out / "pdfs",
         "match": out / "bundle_consistent",
         "mismatch": out / "bundle_mismatch",
+        "hard": out / "hard",
     }
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
@@ -104,6 +112,26 @@ def main(out_dir: str) -> None:
         _append_after_signature(genuine_signed)
     )
     (dirs["pdfs"] / "unsigned.pdf").write_bytes(_MINIMAL_PDF)
+
+    # --- HARD corpus: realistic, convincing adversarial documents (samples/hard/) -------------
+    # A professional-looking statement that reconciles, and the same with ONE income figure inflated
+    # so it still looks clean but breaks the arithmetic invariants (the income-inflation forgery).
+    genuine_statement = render_realistic_statement(tamper=False)
+    (dirs["hard"] / "statement_genuine.png").write_bytes(_png_bytes(genuine_statement))
+    (dirs["hard"] / "statement_tampered.png").write_bytes(
+        _png_bytes(render_realistic_statement(tamper=True))
+    )
+    # The statement rendered into a PDF, PAdES-signed by the SAME demo root, then shadow-attacked —
+    # so Tier-1 source verification can be shown on a document that visibly looks like a bank
+    # e-statement (and the post-signing edit is caught), not a blank page.
+    stmt_leaf_key, stmt_leaf_cert = _make_leaf(ca_key, ca_cert, "estatements.demo-bank.example")
+    signed_statement = _sign_pdf(
+        statement_pdf_bytes(genuine_statement), stmt_leaf_key, stmt_leaf_cert, ca_cert
+    )
+    (dirs["hard"] / "signed_statement_genuine.pdf").write_bytes(signed_statement)
+    (dirs["hard"] / "signed_statement_shadow_attacked.pdf").write_bytes(
+        _append_after_signature(signed_statement)
+    )
 
     # --- Tier-2 arithmetic-consistency samples ------------------------------------------------
     (dirs["statements"] / "genuine_statement.png").write_bytes(

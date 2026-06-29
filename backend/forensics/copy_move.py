@@ -57,6 +57,12 @@ except ImportError as exc:  # pragma: no cover - exercised only on a broken inst
     cv2 = None  # type: ignore[assignment]
     _IMPORT_ERROR = f"OpenCV unavailable: {exc}"
 
+# Identity documents (AADHAAR, PAN_CARD) repeat design elements by specification — the UIDAI logo,
+# Ashoka pillar, and security watermarks appear multiple times, which causes copy-move's offset
+# clustering to fire on genuine repetition. Skip these doc types to avoid false positives.
+# Defined locally to avoid a circular import with intake.sufficiency.
+_IDENTITY_DOC_TYPES: frozenset[str] = frozenset({"AADHAAR", "PAN_CARD"})
+
 # --- Detector tunables. DEFAULT — needs calibration on a real corpus (CLAUDE.md §5). ----------
 ORB_N_FEATURES = 4000          # dense enough to populate a small pasted patch with keypoints
 LOWE_RATIO = 0.75              # Lowe's ratio test; standard distinctiveness gate for ORB matches
@@ -257,6 +263,9 @@ class CopyMoveAnalyzer:
     order = 35
 
     def applicable(self, ctx: AnalysisContext) -> bool:
+        doc_type = (ctx.doc_type or "").upper()
+        if doc_type in _IDENTITY_DOC_TYPES:
+            return False  # identity docs have genuine repeated design elements; skip to avoid false positives
         return self._source_image(ctx) is not None
 
     @staticmethod

@@ -29,13 +29,14 @@ export function VerdictBanner({ verdict, failClosed }: VerdictBannerProps) {
     >
       <span
         className={cn(
-          "flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-2 text-2xl font-bold",
+          "flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border",
+          t.bg,
           t.border,
           t.text,
         )}
         aria-hidden="true"
       >
-        {t.glyph}
+        <t.Icon size={26} strokeWidth={2} />
       </span>
       <div className="min-w-0">
         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">

@@ -1,0 +1,175 @@
+{
+  "schema_version": "1.0",
+  "domain": "financial",
+  "extends": "_shared.json",
+  "depth": "production",
+  "description": "Financial-document rulebook (bank statements, salary slips, Form-16/ITR). Production depth: rules F1-F4 are the built, adversarially-tested arithmetic engine (backend/forensics/arithmetic.py), expressed here over the claim graph. Layer-4 axioms + Layer-5 anomalies (REVIEW-only) + Layer-6 corroboration bridges.",
+
+  "document_types": {
+    "BANK_STATEMENT": { "label": "Bank account statement", "primary": true },
+    "SALARY_SLIP": { "label": "Salary slip / pay slip" },
+    "FORM16": { "label": "Form 16 (TDS certificate)" },
+    "ITR": { "label": "Income Tax Return acknowledgement" },
+    "LOAN_STATEMENT": { "label": "Loan account statement", "scoped": true },
+    "GST_RETURN": { "label": "GST return", "scoped": true }
+  },
+
+  "enums": {
+    "AccountType": ["savings", "current", "od", "cc", "nro", "nre"],
+    "TxnDirection": ["debit", "credit"],
+    "SummaryKind": ["opening", "closing", "total_debits", "total_credits", "grand_total"]
+  },
+
+  "entities": {
+    "BankStatement": {
+      "extends": "DocumentEnvelope",
+      "fields": {
+        "bank": { "type": "OrgName", "identity": true },
+        "branch": { "type": "Text", "cardinality": "0..1" },
+        "ifsc": { "type": "IFSC", "cardinality": "0..1", "identity": true },
+        "period_start": { "type": "Date", "cardinality": "0..1" },
+        "period_end": { "type": "Date", "cardinality": "0..1" }
+      }
+    },
+    "Account": {
+      "fields": {
+        "account_number": { "type": "AccountNumber", "required": true, "identity": true },
+        "holder_name": { "type": "PersonName", "cardinality": "1..*", "identity": true },
+        "account_type": { "type": "AccountType", "cardinality": "0..1" },
+        "opening_balance": { "type": "Money", "maps_to": "StatementData.opening_balance" },
+        "closing_balance": { "type": "Money", "maps_to": "StatementData.closing_balance" }
+      }
+    },
+    "Transaction": {
+      "ordered": true,
+      "maps_to": "StatementData.transactions[]",
+      "fields": {
+        "seq": { "type": "Count", "required": true },
+        "posted_on": { "type": "Date", "cardinality": "0..1" },
+        "value_date": { "type": "Date", "cardinality": "0..1" },
+        "description": { "type": "Text", "cardinality": "0..1" },
+        "debit": { "type": "Money", "cardinality": "0..1" },
+        "credit": { "type": "Money", "cardinality": "0..1" },
+        "running_balance": { "type": "Money", "cardinality": "0..1", "evidence_region": true },
+        "instrument_ref": { "type": "Text", "cardinality": "0..1" }
+      }
+    },
+    "SummaryRow": {
+      "maps_to": "StatementData.stated_total_*",
+      "fields": {
+        "kind": { "type": "SummaryKind", "required": true },
+        "amount": { "type": "Money", "required": true, "evidence_region": true }
+      }
+    },
+    "SalarySlip": {
+      "extends": "DocumentEnvelope",
+      "fields": {
+        "employer": { "type": "OrgName", "identity": true },
+        "employee_name": { "type": "PersonName", "identity": true },
+        "pay_period": { "type": "Date", "cardinality": "0..1" },
+        "gross_earnings": { "type": "Money" },
+        "total_deductions": { "type": "Money" },
+        "net_pay": { "type": "Money" },
+        "components": { "type": "Text", "cardinality": "0..*" }
+      }
+    },
+    "IncomeProof": {
+      "extends": "DocumentEnvelope",
+      "fields": {
+        "assessment_year": { "type": "Text" },
+        "pan": { "type": "PAN", "identity": true },
+        "employer": { "type": "OrgName", "cardinality": "0..1", "identity": true },
+        "gross_income": { "type": "Money" },
+        "taxable_income": { "type": "Money" },
+        "tax_paid": { "type": "Money" }
+      }
+    }
+  },
+
+  "rules": [
+    {
+      "id": "F1", "name": "running_balance_chain", "title": "Running balance carries forward",
+      "rationale": "balance[i] = balance[i-1] + credit[i] - debit[i]; an edited figure breaks the chain at a locatable row. The primary in-document tamper signal.",
+      "applies_when": { "document_types": ["BANK_STATEMENT"], "requires": ["Account.opening_balance"], "min": { "Transaction.running_balance": 2, "Transaction.movement": 1 } },
+      "check": "linear_balance",
+      "bind": { "sequence": "Transaction", "anchor": { "entity": "Account", "field": "opening_balance" }, "credit": { "entity": "Transaction", "field": "credit", "series": true }, "debit": { "entity": "Transaction", "field": "debit", "series": true }, "printed": { "entity": "Transaction", "field": "running_balance", "series": true }, "reanchor_on_printed": true, "tolerance_ref": "arithmetic_abs_tolerance" },
+      "on_fail": { "status": "FAIL", "severity_ref": "hard_tamper", "localize": { "entity": "Transaction", "field": "running_balance" }, "reason": "running balance does not carry forward at row {index}: expected {expected}, printed {printed}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "need opening balance + >=2 printed balances + >=1 movement" }
+    },
+    {
+      "id": "F2", "name": "closing_balance_matches", "title": "Stated closing balance equals last running balance",
+      "applies_when": { "document_types": ["BANK_STATEMENT"], "requires": ["Account.closing_balance", "Transaction.running_balance"] },
+      "check": "equation",
+      "bind": { "lhs": [ { "coef": 1, "ref": { "entity": "Transaction", "field": "running_balance", "reduce": "last_present" } } ], "rhs": { "entity": "Account", "field": "closing_balance" }, "tolerance_ref": "arithmetic_abs_tolerance" },
+      "on_fail": { "status": "FAIL", "severity_ref": "hard_tamper", "localize": { "entity": "Account", "field": "closing_balance" }, "reason": "stated closing balance {printed} != last running balance {expected}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "closing balance or transaction balances absent" }
+    },
+    {
+      "id": "F3", "name": "column_totals", "title": "Stated totals equal the summed columns",
+      "applies_when": { "document_types": ["BANK_STATEMENT"], "requires_any": ["SummaryRow[kind=total_debits]", "SummaryRow[kind=total_credits]"] },
+      "check": "sum_equals", "multi": true,
+      "bindings": [
+        { "sum_field": { "entity": "Transaction", "field": "debit", "series": true }, "equals": { "entity": "SummaryRow", "field": "amount", "where": { "kind": "total_debits" } }, "tolerance_ref": "arithmetic_abs_tolerance", "localize": { "entity": "SummaryRow", "field": "amount", "where": { "kind": "total_debits" } } },
+        { "sum_field": { "entity": "Transaction", "field": "credit", "series": true }, "equals": { "entity": "SummaryRow", "field": "amount", "where": { "kind": "total_credits" } }, "tolerance_ref": "arithmetic_abs_tolerance", "localize": { "entity": "SummaryRow", "field": "amount", "where": { "kind": "total_credits" } } }
+      ],
+      "on_fail": { "status": "FAIL", "severity_ref": "hard_tamper", "reason": "column total mismatch: summed {expected} != stated {printed}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "no stated column totals present" }
+    },
+    {
+      "id": "F4", "name": "net_reconciliation", "title": "Opening + credits - debits = closing",
+      "applies_when": { "document_types": ["BANK_STATEMENT"], "requires": ["Account.opening_balance", "Account.closing_balance"] },
+      "check": "equation",
+      "bind": { "lhs": [ { "coef": 1, "ref": { "entity": "Account", "field": "opening_balance" } }, { "coef": 1, "ref": { "entity": "Transaction", "field": "credit", "series": true, "reduce": "sum" } }, { "coef": -1, "ref": { "entity": "Transaction", "field": "debit", "series": true, "reduce": "sum" } } ], "rhs": { "entity": "Account", "field": "closing_balance" }, "tolerance_ref": "arithmetic_abs_tolerance" },
+      "on_fail": { "status": "FAIL", "severity_ref": "hard_tamper", "localize": { "entity": "Account", "field": "closing_balance" }, "reason": "net reconciliation fails: opening + credits - debits = {expected} != closing {printed}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "opening or closing balance absent" }
+    },
+    {
+      "id": "F5", "name": "date_monotonicity", "title": "Transaction dates are non-decreasing",
+      "rationale": "rows out of chronological order suggest insertion/removal; soft because legitimate same-day or value-date ordering exists.",
+      "applies_when": { "document_types": ["BANK_STATEMENT"], "requires": ["Transaction.posted_on"], "min": { "Transaction.posted_on": 2 } },
+      "check": "sequence_monotonic",
+      "bind": { "sequence_field": { "entity": "Transaction", "field": "posted_on", "series": true }, "strict": false },
+      "on_fail": { "status": "FAIL", "severity_ref": "soft", "localize": { "entity": "Transaction", "field": "posted_on" }, "reason": "transaction dates not in non-decreasing order at row {index}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "fewer than 2 dated rows" }
+    },
+    {
+      "id": "F6", "name": "salary_slip_identity", "title": "Net pay = gross earnings - deductions",
+      "applies_when": { "document_types": ["SALARY_SLIP"], "requires": ["SalarySlip.gross_earnings", "SalarySlip.total_deductions", "SalarySlip.net_pay"] },
+      "check": "equation",
+      "bind": { "lhs": [ { "coef": 1, "ref": { "entity": "SalarySlip", "field": "gross_earnings" } }, { "coef": -1, "ref": { "entity": "SalarySlip", "field": "total_deductions" } } ], "rhs": { "entity": "SalarySlip", "field": "net_pay" }, "tolerance_ref": "arithmetic_abs_tolerance" },
+      "on_fail": { "status": "FAIL", "severity_ref": "hard_tamper", "localize": { "entity": "SalarySlip", "field": "net_pay" }, "reason": "net pay {printed} != gross {gross} - deductions {ded}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "gross / deductions / net not all present" }
+    },
+    {
+      "id": "F7", "name": "income_proof_consistency", "title": "Taxable income <= gross income; tax consistent with slab",
+      "applies_when": { "document_types": ["FORM16", "ITR"], "requires": ["IncomeProof.gross_income", "IncomeProof.taxable_income"] },
+      "check": "comparison",
+      "bind": { "left": { "entity": "IncomeProof", "field": "taxable_income" }, "op": "<=", "right": { "entity": "IncomeProof", "field": "gross_income" } },
+      "on_fail": { "status": "FAIL", "severity_ref": "structural", "localize": { "entity": "IncomeProof", "field": "taxable_income" }, "reason": "taxable income {left} exceeds gross income {right}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "gross/taxable absent" },
+      "sub_checks": [
+        { "id": "F7b", "name": "tax_per_slab", "check": "table_lookup", "depends_on_table": "income_tax_slabs[assessment_year]", "status_when_table_absent": "NOT_EVALUATED", "note": "tax_paid consistency with the slab schedule; NOT_EVALUATED until the AY slab table is configured (honest gate)." }
+      ]
+    }
+  ],
+
+  "anomalies": [
+    { "id": "A_FIN_1", "name": "round_number_salary_credit", "title": "Suspiciously round recurring salary credits", "check": "range", "evaluates_over": { "entity": "Transaction", "filter": "credit present and description ~ salary" }, "heuristic": "fraction of salary credits that are exact multiples of 5000/10000", "severity_ref": "review_only", "status_on_hit": "FAIL", "review_only": true, "rationale": "synthetic statements often use round salary figures; soft signal only." },
+    { "id": "A_FIN_2", "name": "sudden_salary_jump", "title": "Abrupt step-change in salary credit", "check": "comparison", "heuristic": "month-over-month salary credit ratio > jump_threshold", "severity_ref": "review_only", "review_only": true },
+    { "id": "A_FIN_3", "name": "short_statement_window", "title": "Cherry-picked short statement", "check": "comparison", "bind": { "left": { "computed": "period_end - period_start (days)" }, "op": "<", "right": { "const": 60 } }, "severity_ref": "review_only", "review_only": true },
+    { "id": "A_FIN_4", "name": "dormant_account_revival", "title": "Dormant account suddenly active before application", "heuristic": "long zero-activity gap followed by large credits near period_end", "severity_ref": "review_only", "review_only": true, "needs_history": true, "status_when_insufficient_history": "NOT_EVALUATED" }
+  ],
+
+  "corroboration": [
+    { "id": "X_INCOME", "name": "income_agreement", "title": "Bank salary credit ~ salary-slip net ~ Form16/ITR income ~ declared income", "fields": [ { "entity": "Transaction", "field": "credit", "filter": "salary" }, { "entity": "SalarySlip", "field": "net_pay" }, { "entity": "IncomeProof", "field": "gross_income" }, { "external": "application.declared_income" } ], "match": "numeric_tolerance", "mismatch": { "status": "REVIEW", "severity_ref": "soft", "reason": "declared/observed income disagree across sources" }, "insufficient": { "status": "NOT_EVALUATED", "reason": "single income source only" } },
+    { "id": "X_IDENTITY_FIN", "name": "holder_identity", "title": "Account holder identity agrees across the bundle", "anchors": ["holder_name", "pan", "account_number", "ifsc"], "match": "per_value_type", "mismatch": { "status": "REVIEW_OR_REJECT", "severity_source": "cross_document._FIELD_SEVERITY" } },
+    { "id": "X_EMPLOYER", "name": "employer_agreement", "title": "Employer agrees across slip / statement narration / application", "fields": [ { "entity": "SalarySlip", "field": "employer" }, { "entity": "Transaction", "field": "description", "filter": "salary" }, { "external": "application.employer" } ], "match": "fuzzy", "mismatch": { "status": "REVIEW", "severity_ref": "soft" } }
+  ],
+
+  "coverage_notes": {
+    "production": ["F1", "F2", "F3", "F4"],
+    "new_simple": ["F5", "F6"],
+    "gated": { "F7b": "income-tax slab table per assessment year not yet configured -> NOT_EVALUATED", "A_FIN_2/A_FIN_4": "need multi-month history -> NOT_EVALUATED when absent" },
+    "honest_bound": "A fully recomputed-and-reprinted statement satisfies F1-F4; that residual is covered by provenance (Layer 1), resubmission memory, and corroboration (Layer 6) — never claimed by this pack."
+  }
+}

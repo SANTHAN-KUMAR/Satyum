@@ -15,7 +15,20 @@
 
   body {
     @apply bg-canvas text-slate-200 antialiased;
-    font-feature-settings: "cv11", "ss01";
+    /* Inter Variable tabular/contextual features for a crisp data-console read. */
+    font-feature-settings: "cv11", "ss01", "tnum";
+    /* A subtle top-centre glow gives the dark console depth without a busy background. */
+    background-image: radial-gradient(
+      62rem 36rem at 50% -8rem,
+      rgba(34, 211, 238, 0.07),
+      transparent 70%
+    );
+    background-attachment: fixed;
+  }
+
+  /* Tabular figures wherever numbers must align (gauges, tables, money). */
+  .tnum {
+    font-variant-numeric: tabular-nums;
   }
 
   /* Accessible focus ring everywhere — visible keyboard focus (CLAUDE.md §9). */
@@ -36,16 +49,24 @@
 }
 
 @layer components {
+  /* The standard console surface. Flat by default so the verdict hero (which opts into shadow +
+     a verdict tint) clearly out-ranks ordinary panels — killing the "nine identical cards" look. */
   .panel {
-    @apply rounded-xl border border-hairline bg-surface/80 shadow-lg shadow-black/20 backdrop-blur-sm;
+    @apply rounded-xl border border-hairline bg-surface/70;
+  }
+
+  /* A quieter surface for secondary / metadata panels so they recede below the evidence. */
+  .panel-muted {
+    @apply rounded-xl border border-hairline/70 bg-surface/40;
   }
 
   .panel-title {
-    @apply text-xs font-semibold uppercase tracking-[0.14em] text-slate-400;
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400;
   }
 
-  .hairline {
-    @apply border-hairline;
+  /* Section eyebrow used above grouped content. */
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500;
   }
 
   /* Visually-hidden but screen-reader-available helper. */

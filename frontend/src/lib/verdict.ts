@@ -8,6 +8,9 @@
  * (CLAUDE.md §9 "no fabricated UI data"). If the backend recalibrates, update BANDS to match.
  */
 
+import { AlertTriangle, CheckCircle2, Clock, OctagonAlert, XCircle } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
 import type { SignalStatus, Verdict } from "@/api/types";
 
 /** Verdict bands from backend/app/config.py — keep in lockstep. */
@@ -18,8 +21,9 @@ export const BANDS = {
 
 export interface VerdictTheme {
   label: string;
-  glyph: string; // a textual mark; the live UI pairs it with an icon + aria text, never colour alone
-  /** Tailwind utility groups. Colour is NEVER the only signal — always paired with glyph + label. */
+  /** Real icon (lucide); the UI always pairs it with the word + aria text, never colour alone. */
+  Icon: LucideIcon;
+  /** Tailwind utility groups. Colour is NEVER the only signal — always paired with icon + label. */
   text: string;
   bg: string;
   border: string;
@@ -31,36 +35,37 @@ export interface VerdictTheme {
 export const VERDICT_THEME: Record<Verdict, VerdictTheme> = {
   APPROVED: {
     label: "Approved",
-    glyph: "✓",
+    Icon: CheckCircle2,
     text: "text-verdict-approved",
     bg: "bg-verdict-approved-soft",
     border: "border-verdict-approved/60",
     ring: "ring-verdict-approved/40",
-    stroke: "#16a34a",
+    stroke: "#22c55e",
   },
   REVIEW: {
     label: "Review",
-    glyph: "!",
+    Icon: AlertTriangle,
     text: "text-verdict-review",
     bg: "bg-verdict-review-soft",
     border: "border-verdict-review/60",
     ring: "ring-verdict-review/40",
-    stroke: "#d97706",
+    stroke: "#f59e0b",
   },
   REJECTED: {
     label: "Rejected",
-    glyph: "✕",
+    Icon: OctagonAlert,
     text: "text-verdict-rejected",
     bg: "bg-verdict-rejected-soft",
     border: "border-verdict-rejected/60",
     ring: "ring-verdict-rejected/40",
-    stroke: "#dc2626",
+    stroke: "#f43f5e",
   },
 };
 
 export interface StatusTheme {
   /** The honest UI label. NOT_EVALUATED renders as "Pending" per CLAUDE.md §3.4 / §9. */
   label: string;
+  Icon: LucideIcon;
   text: string;
   bg: string;
   border: string;
@@ -70,6 +75,7 @@ export interface StatusTheme {
 export const STATUS_THEME: Record<SignalStatus, StatusTheme> = {
   VALID: {
     label: "Valid",
+    Icon: CheckCircle2,
     text: "text-emerald-300",
     bg: "bg-emerald-500/10",
     border: "border-emerald-500/30",
@@ -77,6 +83,7 @@ export const STATUS_THEME: Record<SignalStatus, StatusTheme> = {
   },
   NOT_EVALUATED: {
     label: "Pending", // honestly distinct from pass/fail (CLAUDE.md §3.4)
+    Icon: Clock,
     text: "text-verdict-pending",
     bg: "bg-verdict-pending-soft",
     border: "border-verdict-pending/30",
@@ -84,6 +91,7 @@ export const STATUS_THEME: Record<SignalStatus, StatusTheme> = {
   },
   ERROR: {
     label: "Error",
+    Icon: XCircle,
     text: "text-verdict-rejected",
     bg: "bg-verdict-rejected-soft",
     border: "border-verdict-rejected/40",

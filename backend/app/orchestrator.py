@@ -15,14 +15,16 @@ from risk.engine import aggregate
 from risk.evidence import build_evidence_pack
 
 
-def run_verification(
-    ctx: AnalysisContext,
-    registry: AnalyzerRegistry,
-    ledger: AuditLedger,
-    timestamp_iso: str,
-) -> TrustScore:
-    signals: list[LayerSignal] = []
+def collect_signals(ctx: AnalysisContext, registry: AnalyzerRegistry) -> list[LayerSignal]:
+    """Run every mode-valid, applicable analyzer over ``ctx`` and return the raw signals.
 
+    This is the analyzer-composition half of :func:`run_verification`, split out so the bundle path can
+    gather each document's signals, compute the bundle-level corroboration (which needs ALL documents'
+    claim graphs), and only THEN aggregate each document *with* that corroboration injected (ADR-004 §6
+    — a corroborated bundle can reach APPROVE, which a per-document-first aggregation cannot give). It
+    upholds the cardinal rule (§4): an analyzer that raises becomes ERROR, never crashes the waterfall.
+    """
+    signals: list[LayerSignal] = []
     for analyzer in registry.for_mode(ctx.intake_mode):
         try:
             if not analyzer.applicable(ctx):
@@ -43,14 +45,30 @@ def run_verification(
             )
 
         signals.append(signal)
+    return signals
+
+
+def run_verification(
+    ctx: AnalysisContext,
+    registry: AnalyzerRegistry,
+    ledger: AuditLedger,
+    timestamp_iso: str,
+) -> TrustScore:
+    signals = collect_signals(ctx, registry)
 
     trust = aggregate(
         ctx.session_id, ctx.intake_mode, signals,
         doc_type=ctx.doc_type, source_was_pullable=ctx.source_was_pullable,
     )
     trust.evidence_pack = build_evidence_pack(trust)
+    audit_trust(ledger, timestamp_iso, trust)
+    return trust
 
-    # Tamper-evident audit (decision metadata + signal digests only — never document content, §10).
+
+def audit_trust(ledger: AuditLedger, timestamp_iso: str, trust: TrustScore) -> None:
+    """Append a single document's verdict to the tamper-evident ledger (decision metadata + signal
+    digests only — never document content or imagery, CLAUDE.md §10). Shared by the single-document
+    and bundle paths so every document is recorded with an identical, reconstructable schema."""
     ledger.record(
         timestamp_iso,
         {
@@ -67,4 +85,3 @@ def run_verification(
             ],
         },
     )
-    return trust

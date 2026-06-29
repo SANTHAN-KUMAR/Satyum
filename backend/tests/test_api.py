@@ -136,7 +136,10 @@ def client() -> TestClient:
 # --- 1. Discrimination: genuine -> APPROVED, tampered -> flagged --------------------------------
 
 @pytest.mark.skipif(not _TESSERACT, reason="tesseract OCR not available")
-def test_genuine_statement_is_approved(client: TestClient):
+def test_genuine_statement_routes_to_review(client: TestClient):
+    # ADR-004 §7 #2: a lone unsigned statement image with clean arithmetic but no cross-source
+    # corroboration and no provenance is indeterminate -> REVIEW, never auto-APPROVE. The arithmetic
+    # engine still runs and finds no violation; what is missing is corroboration, not integrity.
     png = _png_bytes(_render_statement(_GENUINE_ROWS))
     resp = client.post(
         "/api/verify",
@@ -145,8 +148,8 @@ def test_genuine_statement_is_approved(client: TestClient):
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["verdict"] == "APPROVED"
-    # the arithmetic engine actually ran and found no violation
+    assert body["verdict"] == "REVIEW"
+    # the arithmetic engine actually ran and found no violation (clean, but not sufficient alone)
     arith = [s for s in body["signals"] if s["name"] == "arithmetic_consistency"]
     assert arith and arith[0]["status"] == "VALID" and arith[0]["suspicion"] == 0.0
 

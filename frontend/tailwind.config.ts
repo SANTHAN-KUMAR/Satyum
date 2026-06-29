@@ -10,27 +10,32 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Base canvas + surfaces (deep slate/navy)
-        canvas: "#0a0f1c",
-        surface: "#111827",
-        "surface-2": "#1a2335",
-        hairline: "#27324a",
+        // Base canvas + surfaces (deep slate/navy). `surface` lifts slightly off `canvas` and
+        // `elevated` sits above it so the verdict hero can out-rank the metadata rail (a real
+        // depth hierarchy instead of nine identical panels).
+        canvas: "#080d18",
+        surface: "#111a2c",
+        "surface-2": "#1a2538",
+        elevated: "#16213a",
+        hairline: "#2a374f",
+        "hairline-strong": "#3a4a68",
         // One accent
-        accent: { DEFAULT: "#22d3ee", muted: "#0e7490" },
-        // Verdict semantics — unmistakable, never reused for chrome
+        accent: { DEFAULT: "#22d3ee", muted: "#0e7490", soft: "#0c2a33" },
+        // Verdict semantics — unmistakable, never reused for chrome. `-soft` is a readable tint for
+        // the hero (brighter than before so the verdict reads across a room / on a projector).
         verdict: {
-          approved: "#16a34a",
-          "approved-soft": "#0d3320",
-          review: "#d97706",
-          "review-soft": "#3a2a08",
-          rejected: "#dc2626",
-          "rejected-soft": "#3a1212",
-          pending: "#64748b",
-          "pending-soft": "#1e2636",
+          approved: "#22c55e",
+          "approved-soft": "#10301f",
+          review: "#f59e0b",
+          "review-soft": "#352706",
+          rejected: "#f43f5e",
+          "rejected-soft": "#3a1018",
+          pending: "#7c8aa5",
+          "pending-soft": "#1b2638",
         },
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: ["Inter Variable", "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
       keyframes: {

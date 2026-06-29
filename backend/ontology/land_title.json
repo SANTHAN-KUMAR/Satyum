@@ -1,0 +1,190 @@
+{
+  "schema_version": "1.0",
+  "domain": "land_title",
+  "extends": "_shared.json",
+  "depth": "real_but_scoped",
+  "description": "Land/title rulebook (sale deeds, agreements to sell, Records of Rights, Encumbrance Certificates, mutations). Real ontology + axioms grounded in the Registration Act 1908 and Indian RoR practice; state-fragmented data (stamp/guidance tables, RoR variants, ULPIN formats) is honestly NOT_EVALUATED until configured. Layer-4 axioms + Layer-5 anomalies + Layer-6 bridges.",
+
+  "document_types": {
+    "SALE_DEED": { "label": "Sale / conveyance deed", "primary": true },
+    "AGREEMENT_TO_SELL": { "label": "Agreement to sell (precedes the deed)" },
+    "RECORD_OF_RIGHTS": { "label": "Record of Rights (RoR / 7-12 / RTC / Patta)" },
+    "ENCUMBRANCE_CERTIFICATE": { "label": "Encumbrance Certificate (EC)" },
+    "MUTATION_RECORD": { "label": "Mutation / Khata transfer record" },
+    "GIFT_DEED": { "label": "Gift deed", "scoped": true },
+    "MORTGAGE_DEED": { "label": "Mortgage deed", "scoped": true }
+  },
+
+  "enums": {
+    "DeedType": ["sale", "gift", "mortgage", "lease", "partition", "release", "settlement"],
+    "Tenure": ["freehold", "leasehold", "agricultural", "inam", "ryotwari", "government_assigned"],
+    "PropertyType": ["agricultural", "residential", "commercial", "industrial", "vacant_plot"],
+    "EncumbranceType": ["mortgage", "lien", "lis_pendens", "attachment", "easement", "lease", "charge"],
+    "ECForm": ["form15_encumbered", "form16_nil"],
+    "RoRVariant": ["seven_twelve_MH", "rtc_pahani_KA", "patta_chitta_TN", "khatauni_khasra_UP", "jamabandi_PB_HR", "ror_generic"],
+    "PartyRole": ["seller", "buyer", "owner", "mortgagor", "mortgagee", "lessor", "lessee", "witness"]
+  },
+
+  "entities": {
+    "PropertyParcel": {
+      "fields": {
+        "survey_number": { "type": "SurveyNumber", "cardinality": "0..1", "identity": true },
+        "sub_division": { "type": "Text", "cardinality": "0..1" },
+        "parcel_id": { "type": "ParcelId", "cardinality": "0..1", "identity": true },
+        "extent": { "type": "Area", "cardinality": "0..1" },
+        "location": { "type": "Address", "cardinality": "0..1" },
+        "boundaries": { "type": "Text", "cardinality": "0..1" },
+        "property_type": { "type": "PropertyType", "cardinality": "0..1" }
+      }
+    },
+    "SaleDeed": {
+      "extends": "DocumentEnvelope",
+      "fields": {
+        "deed_type": { "type": "DeedType", "required": true },
+        "execution_date": { "type": "Date", "required": true },
+        "seller": { "type": "PersonName", "cardinality": "1..*", "role": "seller", "identity": true },
+        "buyer": { "type": "PersonName", "cardinality": "1..*", "role": "buyer", "identity": true },
+        "consideration": { "type": "Money" },
+        "consideration_in_words": { "type": "Text", "cardinality": "0..1" },
+        "market_value": { "type": "Money", "cardinality": "0..1" },
+        "guidance_value": { "type": "Money", "cardinality": "0..1" },
+        "stamp_duty_paid": { "type": "Money", "cardinality": "0..1" },
+        "registration_fee": { "type": "Money", "cardinality": "0..1" }
+      }
+    },
+    "RegistrationEvent": {
+      "fields": {
+        "registration_number": { "type": "RegistrationNumber", "identity": true },
+        "registration_date": { "type": "Date" },
+        "sro": { "type": "OrgName", "cardinality": "0..1" },
+        "book": { "type": "Text", "cardinality": "0..1" },
+        "volume_page": { "type": "Text", "cardinality": "0..1" }
+      }
+    },
+    "RecordOfRights": {
+      "extends": "DocumentEnvelope",
+      "fields": {
+        "variant": { "type": "RoRVariant", "cardinality": "0..1" },
+        "current_owner": { "type": "PersonName", "cardinality": "1..*", "role": "owner", "identity": true },
+        "survey_number": { "type": "SurveyNumber", "cardinality": "0..1", "identity": true },
+        "parcel_id": { "type": "ParcelId", "cardinality": "0..1", "identity": true },
+        "extent": { "type": "Area", "cardinality": "0..1" },
+        "tenure": { "type": "Tenure", "cardinality": "0..1" },
+        "mutation_number": { "type": "Text", "cardinality": "0..1" }
+      }
+    },
+    "EncumbranceCertificate": {
+      "extends": "DocumentEnvelope",
+      "fields": {
+        "period_from": { "type": "Date" },
+        "period_to": { "type": "Date" },
+        "form_type": { "type": "ECForm" },
+        "survey_number": { "type": "SurveyNumber", "cardinality": "0..1", "identity": true }
+      }
+    },
+    "Encumbrance": {
+      "fields": {
+        "type": { "type": "EncumbranceType", "required": true },
+        "amount": { "type": "Money", "cardinality": "0..1" },
+        "in_favor_of": { "type": "PersonName", "cardinality": "0..1" },
+        "date": { "type": "Date", "cardinality": "0..1" },
+        "registration_ref": { "type": "RegistrationNumber", "cardinality": "0..1" }
+      }
+    }
+  },
+
+  "relations": {
+    "SaleDeed.transfers": "PropertyParcel",
+    "SaleDeed.registered_by": "RegistrationEvent",
+    "RecordOfRights.describes": "PropertyParcel",
+    "EncumbranceCertificate.describes": "PropertyParcel",
+    "EncumbranceCertificate.lists": "Encumbrance",
+    "RecordOfRights.lists": "Encumbrance",
+    "SaleDeed.prior_title": "SaleDeed"
+  },
+
+  "rules": [
+    {
+      "id": "L1", "name": "seller_is_owner", "title": "Deed seller matches the Record-of-Rights owner",
+      "rationale": "a seller who is not the owner of record is the classic title/impersonation defect.",
+      "applies_when": { "document_types": ["SALE_DEED"], "requires_bundle": ["RecordOfRights.current_owner"] },
+      "check": "fuzzy_match",
+      "bind": { "left": { "entity": "SaleDeed", "field": "seller" }, "right": { "entity": "RecordOfRights", "field": "current_owner" }, "min_ratio": 0.85, "anchor": "surname" },
+      "on_fail": { "status": "FAIL", "severity_ref": "title_defect", "localize": { "entity": "SaleDeed", "field": "seller" }, "reason": "deed seller '{left}' does not match RoR owner '{right}'" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "no Record of Rights in the bundle to compare" }
+    },
+    {
+      "id": "L2", "name": "registration_window", "title": "Registration within the legal window after execution",
+      "rationale": "Registration Act 1908 s.23: a document must be registered within 4 months of execution; registration cannot precede execution.",
+      "applies_when": { "document_types": ["SALE_DEED"], "requires": ["SaleDeed.execution_date", "RegistrationEvent.registration_date"] },
+      "check": "date_within",
+      "bind": { "date": { "entity": "RegistrationEvent", "field": "registration_date" }, "after": { "entity": "SaleDeed", "field": "execution_date" }, "max_offset": { "value": 4, "unit": "month" } },
+      "on_fail": { "status": "FAIL", "severity_ref": "structural", "localize": { "entity": "RegistrationEvent", "field": "registration_date" }, "reason": "registration date {date} not within [execution, execution+4mo] of {after}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "execution or registration date absent" }
+    },
+    {
+      "id": "L3", "name": "property_identity_consistency", "title": "Property identifiers agree across deed / RoR / EC",
+      "applies_when": { "document_types": ["SALE_DEED", "RECORD_OF_RIGHTS", "ENCUMBRANCE_CERTIFICATE"], "requires_bundle_any": ["survey_number", "parcel_id"] },
+      "check": "consistency_across",
+      "bind": { "field": "survey_number", "doc_types": ["SALE_DEED", "RECORD_OF_RIGHTS", "ENCUMBRANCE_CERTIFICATE"], "match": "exact_normalized" },
+      "on_fail": { "status": "FAIL", "severity_ref": "title_defect", "reason": "property identifier differs across documents: {values}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "no shared property identifier across documents" }
+    },
+    {
+      "id": "L4", "name": "extent_unit_consistency", "title": "Property extent reconciles across documents after unit normalization",
+      "applies_when": { "document_types": ["SALE_DEED", "RECORD_OF_RIGHTS"], "requires_bundle": ["PropertyParcel.extent", "RecordOfRights.extent"] },
+      "check": "quantity_equal",
+      "bind": { "left": { "entity": "PropertyParcel", "field": "extent" }, "right": { "entity": "RecordOfRights", "field": "extent" }, "dimension": "AreaUnit", "tolerance": 0.5 },
+      "on_fail": { "status": "FAIL", "severity_ref": "structural", "reason": "extent mismatch after unit conversion: {left} vs {right}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "extent absent in one document, or unit not in the conversion table (e.g. bigha/ankanam)" }
+    },
+    {
+      "id": "L5", "name": "stamp_duty_consistency", "title": "Stamp duty consistent with consideration / guidance value",
+      "rationale": "stamp duty = state_rate x max(consideration, guidance_value); a large shortfall suggests undervaluation.",
+      "applies_when": { "document_types": ["SALE_DEED"], "requires": ["SaleDeed.stamp_duty_paid", "SaleDeed.consideration"] },
+      "check": "equation",
+      "depends_on_table": "stamp_duty_rate[state]",
+      "status_when_table_absent": "NOT_EVALUATED",
+      "bind": { "lhs": [ { "coef": 1, "ref": { "entity": "SaleDeed", "field": "stamp_duty_paid" } } ], "rhs": { "formula": "rate * max(consideration, guidance_value)" }, "tolerance": 0.05 },
+      "on_fail": { "status": "FAIL", "severity_ref": "soft", "localize": { "entity": "SaleDeed", "field": "stamp_duty_paid" }, "reason": "stamp duty {printed} inconsistent with expected {expected}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "state stamp-rate / guidance-value table not configured (state-fragmented gate)" }
+    },
+    {
+      "id": "L6", "name": "encumbrance_disclosure", "title": "EC encumbrances are disclosed in the deed",
+      "rationale": "an encumbrance on the EC that the deed claims clear title over is a material non-disclosure.",
+      "applies_when": { "document_types": ["ENCUMBRANCE_CERTIFICATE"], "requires_bundle": ["SALE_DEED"] },
+      "check": "set_subset",
+      "bind": { "subset": { "entity": "Encumbrance", "from": "EncumbranceCertificate", "key": "registration_ref" }, "superset": { "entity": "Encumbrance", "from": "SaleDeed", "key": "registration_ref" }, "key": "registration_ref" },
+      "on_fail": { "status": "FAIL", "severity_ref": "title_defect", "reason": "EC lists encumbrance(s) not disclosed in the deed: {missing}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "no deed to compare, or EC is Form-16 nil" }
+    },
+    {
+      "id": "L7", "name": "chain_of_title", "title": "Successive deeds form a valid ownership chain",
+      "rationale": "in a multi-deed chain, transfer dates must strictly increase and each seller must equal the prior buyer.",
+      "applies_when": { "document_types": ["SALE_DEED"], "min": { "SaleDeed": 2 } },
+      "check": "sequence_monotonic", "secondary_check": "chain_link",
+      "bind": { "sequence_field": { "entity": "SaleDeed", "field": "execution_date", "order": "chain" }, "strict": true, "link": { "this_role": "seller", "prior_role": "buyer", "match": "fuzzy", "min_ratio": 0.85 } },
+      "on_fail": { "status": "FAIL", "severity_ref": "title_defect", "reason": "broken chain of title: {detail}" },
+      "on_insufficient": { "status": "NOT_EVALUATED", "reason": "fewer than 2 deeds in the chain" }
+    }
+  ],
+
+  "anomalies": [
+    { "id": "A_LAND_1", "name": "rapid_resale_flip", "title": "Unusually rapid ownership transfer", "heuristic": "two transfers of the same parcel within flip_window_days", "severity_ref": "review_only", "review_only": true, "needs_history": true, "status_when_insufficient_history": "NOT_EVALUATED" },
+    { "id": "A_LAND_2", "name": "value_far_from_guidance", "title": "Declared value far from guidance value", "check": "ratio_within", "heuristic": "consideration / guidance_value outside [0.5, 2.0]", "severity_ref": "review_only", "review_only": true, "depends_on_table": "guidance_value[locality]", "status_when_table_absent": "NOT_EVALUATED" },
+    { "id": "A_LAND_3", "name": "reused_property_across_cases", "title": "Same property pledged across applicants", "via": "resubmission_memory (pHash + parcel_id)", "severity_ref": "review_only", "review_only": true }
+  ],
+
+  "corroboration": [
+    { "id": "X_TITLE", "name": "seller_owner_chain", "title": "Seller = RoR owner = prior-deed buyer", "note": "the bundle-level view of L1 + L7", "anchors": ["name", "property_id"], "mismatch": { "status": "REVIEW_OR_REJECT", "severity_ref": "title_defect" } },
+    { "id": "X_COLLATERAL", "name": "collateral_match", "title": "Financed property (loan agreement schedule) = pledged property (deed/RoR)", "fields": [ { "entity": "PropertyParcel", "field": "survey_number" }, { "domain": "legal_contract", "entity": "Schedule", "field": "property_id" } ], "match": "exact_normalized", "mismatch": { "status": "REJECT", "severity_ref": "hard_mismatch", "reason": "collateral in the loan does not match the title document" } },
+    { "id": "X_PARTY_ID_LAND", "name": "party_identity", "title": "Buyer/seller identity agrees with KYC across the bundle", "anchors": ["name", "pan", "aadhaar", "address"], "mismatch": { "status": "REVIEW_OR_REJECT", "severity_source": "cross_document._FIELD_SEVERITY" } }
+  ],
+
+  "coverage_notes": {
+    "buildable_now": ["L1", "L2", "L3", "L6", "L7"],
+    "near_term": { "L4": "needs the AreaUnit conversion table (mostly present in _shared.json; bigha/ankanam region-specific)" },
+    "gated": { "L5": "per-state stamp-rate + guidance-value tables (state-fragmented) -> NOT_EVALUATED", "A_LAND_2": "guidance-value table -> NOT_EVALUATED", "RoRVariant parsing / ParcelId formats": "scoped per state" },
+    "honest_bound": "Land coverage is real but state-fragmented; every uncovered invariant returns NOT_EVALUATED, never a faked pass (CLAUDE.md 3.4). National automated encumbrance search is excluded (no uniform API)."
+  }
+}

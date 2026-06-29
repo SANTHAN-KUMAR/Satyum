@@ -1,3 +1,4 @@
+import { ChevronRight } from "lucide-react";
 import type { BundleDocument, BundleTrustScore } from "@/api/types";
 import { Panel } from "@/components/primitives/Panel";
 import { Tag } from "@/components/primitives/Tag";
@@ -67,7 +68,7 @@ function DocumentRow({ doc }: { doc: BundleDocument }) {
             theme.border,
           )}
         >
-          <span aria-hidden="true">{theme.glyph}</span>
+          <theme.Icon size={13} strokeWidth={2.25} aria-hidden="true" />
           {theme.label}
         </span>
         <span className="text-sm font-medium text-slate-100">{nodeLabel(doc.label)}</span>
@@ -80,9 +81,14 @@ function DocumentRow({ doc }: { doc: BundleDocument }) {
       <p className="mt-1 pl-1 text-xs text-slate-500">{tier}</p>
 
       <details className="group mt-2 pl-1">
-        <summary className="cursor-pointer select-none text-xs font-medium text-accent/80 hover:text-accent">
-          <span className="group-open:hidden">Show this document's signals ▸</span>
-          <span className="hidden group-open:inline">Hide this document's signals ▾</span>
+        <summary className="inline-flex cursor-pointer select-none items-center gap-1 text-xs font-medium text-accent/80 hover:text-accent">
+          <ChevronRight
+            size={13}
+            className="transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+          <span className="group-open:hidden">Show this document's signals</span>
+          <span className="hidden group-open:inline">Hide this document's signals</span>
         </summary>
         <div className="mt-3 space-y-3">
           <SignalList signals={trust.signals} />
