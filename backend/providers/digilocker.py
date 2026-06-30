@@ -35,6 +35,7 @@ from providers.contracts import (
 )
 from verification.signature import (
     PROV_TAMPERED,
+    PROV_UNVERIFIED_ISSUER,
     PROV_VERIFIED,
     PadesSignatureAnalyzer,
 )
@@ -135,6 +136,21 @@ class DigiLockerProvider:
                 provenance_mode=ProvenanceMode.MANUAL_UPLOAD,
                 issuer=issuer,
                 detail=f"signature present but INVALID — tampering evidence ({signal.reason})",
+                measurements=signal.measurements,
+            )
+
+        if signal.status == SignalStatus.NOT_EVALUATED and provenance == PROV_UNVERIFIED_ISSUER:
+            # Signature present and cryptographically valid, but its chain does not reach a pinned
+            # anchor — the issuer cannot be confirmed. This is NOT "absent" (there IS a signature) and
+            # NOT "tampered" (the bytes are intact): it is NOT_VERIFIED — we could not confirm the
+            # source. Honest, never a fabricated tamper verdict (§3.1). Pin the issuer root to verify it.
+            return SourceResult(
+                provider=self.name,
+                doc_class=doc_request.doc_class,
+                signature_status=SignatureStatus.NOT_VERIFIED,
+                provenance_mode=ProvenanceMode.MANUAL_UPLOAD,
+                issuer=issuer,
+                detail=f"signature valid but issuer not confirmed (chain not pinned) — {signal.reason}",
                 measurements=signal.measurements,
             )
 

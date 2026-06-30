@@ -40,8 +40,13 @@ logger = logging.getLogger(__name__)
 
 # Provenance states surfaced in measurements['provenance'] (shared vocabulary with the UI/Provenance).
 PROV_VERIFIED = "verified"  # intact + chains to a pinned anchor + covers the whole file + not revoked
-PROV_TAMPERED = "tampered"  # present but INVALID: forged chain / appended bytes / bad digest / revoked
+PROV_TAMPERED = "tampered"  # present but INVALID: appended bytes / bad digest / revoked cert
 PROV_ABSENT = "absent"  # no signature at all -> route to Tier 2
+# Signature is cryptographically intact + valid + covers the whole file + not revoked, but its chain
+# does NOT reach a pinned anchor. The document is UNALTERED — this is NOT tampering. It means the
+# issuer cannot be confirmed (e.g. a genuine UIDAI/CCA-India-signed Aadhaar when those roots are not
+# pinned). Treated as "no confirmed source" -> forensic fallback, never a fabricated tamper verdict.
+PROV_UNVERIFIED_ISSUER = "unverified_issuer"
 
 # v2 provenance result contract (ADR-004 Layer 1) — the states surfaced to the decision brain.
 # SOURCE_AVOIDED is emitted by the PDF-only red-flag analyzer (provenance.py), not here.
@@ -415,19 +420,48 @@ class PadesSignatureAnalyzer:
                 measurements=measurements,
             )
 
-        # Present but invalid: forged chain, appended bytes, broken digest, or revoked cert -> tamper.
+        # Carve-out — "valid signature, untrusted issuer" is NOT tampering (CLAUDE.md §3.1/§3.3).
+        # When EVERY signature is cryptographically intact + valid, covers the whole file, and is not
+        # revoked — and the ONLY failure is that the chain does not reach a pinned anchor — the document
+        # is UNALTERED. This is a genuine, common case: a real UIDAI/CCA-India-signed Aadhaar or signed
+        # bank e-statement whose issuer root we have not pinned. Reporting it as "tampering" and hard-
+        # rejecting it is a false fraud accusation. Treat it as "source not confirmed" → forensic
+        # fallback (like an unsigned doc), never a fabricated tamper verdict. (A self-signed forgery,
+        # by contrast, raises PathValidationError above and lands as intact=False → genuine tamper, so
+        # it is NOT excused here.) Pin the issuer's root (e.g. CCA-India) to verify such a doc at source.
+        content_intact_all = all(
+            s["intact"] and s["valid"] and s["covers_whole_file"] and not s["revoked"]
+            for s in per_sig
+        )
+        if content_intact_all:
+            untrusted_idx = [s["index"] for s in per_sig if not s["trusted"]]
+            measurements["provenance"] = PROV_UNVERIFIED_ISSUER
+            measurements["provenance_result"] = PROV_RESULT_NO_SOURCE
+            return LayerSignal.not_evaluated(
+                self.name,
+                self.layer,
+                self.mode,
+                "signature is cryptographically valid and the document is unaltered, but the signer's "
+                f"certificate does not chain to a pinned trust anchor (sig {untrusted_idx}) — issuer "
+                "not confirmed. Routing to forensic verification; pin the issuer root (e.g. CCA-India) "
+                "to verify this document at source.",
+                **measurements,
+            )
+
+        # Present and genuinely INVALID: broken digest, appended bytes after /ByteRange, or a revoked
+        # certificate — the signed content was altered or the cert was revoked. This IS tampering.
         reasons = []
         for s in per_sig:
             if s["revoked"]:
                 reasons.append(f"sig {s['index']}: signing certificate is REVOKED (CRL/OCSP)")
-            elif not s["trusted"]:
-                reasons.append(f"sig {s['index']}: chain does not reach a pinned anchor")
             elif not s["intact"] or not s["valid"]:
                 reasons.append(f"sig {s['index']}: cryptographic digest/signature invalid")
             elif not s["covers_whole_file"]:
                 reasons.append(
                     f"sig {s['index']}: bytes appended after /ByteRange (coverage={s['coverage']})"
                 )
+            elif not s["trusted"]:
+                reasons.append(f"sig {s['index']}: chain does not reach a pinned anchor")
         detail = "; ".join(reasons) or "signature present but did not verify"
         return LayerSignal.valid(
             self.name,
