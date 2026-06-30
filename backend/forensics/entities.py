@@ -251,6 +251,41 @@ class EntityExtractionAnalyzer:
             # Text-based PDFs may not have gone through the raster OCR path; this stays best-effort.
             text = ctx.shared.get("page_text", "") or ""
         entities = extract_entities(text)
+        
+        # Supplement regex entities with VLM extracted claims if available (ADR-004 identity fallback)
+        cg = ctx.shared.get("claim_graph")
+        if cg:
+            # Map holder_name (from ID cards/statements) to the canonical 'name' entity if regex missed it
+            if not entities.name:
+                name_claim = cg.first("holder_name") or cg.first("name")
+                if name_claim and name_claim.value:
+                    # Apply the same normalisation so the cross-document matching works identically
+                    entities = ExtractedEntities(
+                        pan=entities.pan, aadhaar=entities.aadhaar, aadhaar_invalid=entities.aadhaar_invalid,
+                        ifsc=entities.ifsc, account_number=entities.account_number,
+                        name=normalise_name(name_claim.value) or entities.name,
+                        dob=entities.dob
+                    )
+            # We could do the same for PAN/DOB if needed, but the bug specifically requested holder_name.
+            if not entities.dob:
+                dob_claim = cg.first("date_of_birth") or cg.first("dob")
+                if dob_claim and dob_claim.value:
+                    entities = ExtractedEntities(
+                        pan=entities.pan, aadhaar=entities.aadhaar, aadhaar_invalid=entities.aadhaar_invalid,
+                        ifsc=entities.ifsc, account_number=entities.account_number,
+                        name=entities.name,
+                        dob=_normalise_dob(dob_claim.value) or entities.dob
+                    )
+            if not entities.pan:
+                pan_claim = cg.first("pan")
+                if pan_claim and pan_claim.value:
+                    entities = ExtractedEntities(
+                        pan=pan_claim.value.upper(), aadhaar=entities.aadhaar, aadhaar_invalid=entities.aadhaar_invalid,
+                        ifsc=entities.ifsc, account_number=entities.account_number,
+                        name=entities.name,
+                        dob=entities.dob
+                    )
+
         ctx.shared["entities"] = entities
         present = list(entities.comparable_fields().keys())
 
