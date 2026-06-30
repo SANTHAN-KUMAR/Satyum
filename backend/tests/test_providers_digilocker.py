@@ -92,12 +92,15 @@ def test_path_b_trusted_pdf_is_verified_at_source(anchor_dir, signed_trusted):
     assert res.signed_bytes == signed_trusted
 
 
-# --- (b) MUST-FAIL: attacker CA not pinned -> chain fails -> INVALID -------------------------------
+# --- (b) MUST-NOT-VERIFY: unpinned CA -> issuer unconfirmed -> NOT_VERIFIED (not "tampered") --------
 
-def test_path_b_attacker_pdf_is_invalid(anchor_dir, signed_attacker):
+def test_path_b_unpinned_issuer_is_not_verified(anchor_dir, signed_attacker):
+    # A signature from a CA we do not pin is cryptographically intact, so it is NOT tampering — the
+    # issuer simply cannot be confirmed. The provider must never source-verify it, but must also not
+    # fabricate a tamper verdict: NOT_VERIFIED, not INVALID (the genuine-but-unpinned vs forgery case).
     provider = DigiLockerProvider(anchor_dir=anchor_dir)
     res = provider.fetch(_consent(), _req(), payload=signed_attacker)
-    assert res.signature_status == SignatureStatus.INVALID
+    assert res.signature_status == SignatureStatus.NOT_VERIFIED
     assert res.verified_at_source is False
     assert res.signed_bytes is None  # never hand unverified bytes onward as "source-verified"
 
@@ -123,12 +126,13 @@ def test_path_b_unsigned_pdf_is_absent(anchor_dir, _pdf):
 
 # --- discrimination litmus (would FAIL against any constant) --------------------------------------
 
-def test_verified_is_separated_from_invalid(anchor_dir, signed_trusted, signed_attacker):
+def test_verified_is_separated_from_unverified(anchor_dir, signed_trusted, signed_attacker):
     provider = DigiLockerProvider(anchor_dir=anchor_dir)
     good = provider.fetch(_consent(), _req(), payload=signed_trusted)
     bad = provider.fetch(_consent(), _req(), payload=signed_attacker)
     assert good.signature_status == SignatureStatus.VERIFIED
-    assert bad.signature_status == SignatureStatus.INVALID
+    assert bad.signature_status == SignatureStatus.NOT_VERIFIED  # unconfirmed issuer, not "tampered"
+    assert good.verified_at_source is True and bad.verified_at_source is False
 
 
 # --- fail-closed + honest gates -------------------------------------------------------------------

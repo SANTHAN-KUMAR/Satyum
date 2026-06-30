@@ -6,13 +6,19 @@ signing utilities — no checked-in binaries, no hand-tuning. The suite proves t
 *separates*:
 
   (a) PDF signed by a test CA we ALSO pin as the trust root  -> **verified** (suspicion 0.0);
-  (b) PDF signed by a DIFFERENT (attacker) CA we do NOT pin  -> **tampered** (chain fails);
+  (b) PDF signed by a DIFFERENT CA we do NOT pin -> **issuer unconfirmed** (NOT_EVALUATED): the CMS
+      math is intact, so this is NOT tampering — the chain simply does not reach a pinned anchor. This
+      is the genuine-but-unpinned case (a real UIDAI/CCA-India Aadhaar before its root is pinned) AND a
+      self-signed forgery, which are cryptographically identical and so are treated identically;
   (c) a validly-signed PDF with bytes appended after the signature -> **tampered**
-      (ByteRange/coverage no longer covers the whole file);
+      (ByteRange/coverage no longer covers the whole file — the content WAS altered);
   (d) an unsigned PDF -> **absent** / NOT_EVALUATED.
 
-(a) MUST be separated from (b)/(c) or the test fails — and every case would FAIL against a constant
-return (no single constant yields suspicion 0.0 for (a), 1.0 for (b)/(c), and NOT_EVALUATED for (d)).
+(a) MUST be separated from (b)/(c)/(d) or the test fails, and every case would FAIL against a constant
+return (no single constant yields VERIFIED for (a), UNVERIFIED_ISSUER for (b), TAMPERED for (c), and
+ABSENT for (d)). Reserving "tampering" for actual content alteration (c, and a revoked cert) and
+routing an unconfirmed issuer (b) to forensic review is the §3.1/§3.3 honesty rule: never accuse a
+genuine, unaltered document of fraud just because we have not pinned its issuer's root.
 
 Honest non-coverage (TESTING-STRATEGY §3 Tier-1): a validly-signed document proves *origin +
 integrity*, not *truthfulness* — asserted below as "verified source, not a fraud verdict".
@@ -43,6 +49,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID  # noqa: E402
 from verification.signature import (  # noqa: E402
     PROV_ABSENT,
     PROV_TAMPERED,
+    PROV_UNVERIFIED_ISSUER,
     PROV_VERIFIED,
     PadesSignatureAnalyzer,
 )
@@ -287,22 +294,29 @@ def test_a_trusted_signature_is_verified(anchor_dir, pdf_signed_trusted):
 
 
 # --------------------------------------------------------------------------------------------------
-# (b) MUST-FAIL: attacker's own CA, not pinned -> chain fails -> tampered.
+# (b) MUST-NOT-VERIFY: a signature from a CA we do NOT pin. The CMS math is intact, so this is NOT
+# tampering (the bytes are unaltered) — it is an UNCONFIRMED ISSUER. It must never be source-verified;
+# it routes to forensic fallback as NOT_EVALUATED. This is exactly the genuine-but-unpinned case (a
+# real UIDAI/CCA-India Aadhaar whose root is not pinned) AND the self-signed forgery — cryptographically
+# identical, so both are honestly "issuer unconfirmed", never a fabricated tamper verdict (§3.1/§3.3).
 # --------------------------------------------------------------------------------------------------
 
 
-def test_b_attacker_cert_chain_fails(anchor_dir, pdf_signed_attacker):
+def test_b_unpinned_issuer_is_unconfirmed_not_tampered(anchor_dir, pdf_signed_attacker):
     az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
     ctx = _ctx(pdf_signed_attacker)
 
     sig = az.analyze(ctx)
-    assert sig.status == SignalStatus.VALID
-    assert sig.suspicion == 1.0, "an attacker-CA signature must be flagged as tampered"
-    assert sig.measurements["provenance"] == PROV_TAMPERED
-    # The CMS math may be intact, but the chain must NOT reach a pinned anchor — that is the attack.
-    assert sig.measurements["signatures"][0]["trusted"] is False
-    # never publish provenance for an unverified chain
+    # Security invariant preserved: NOT source-verified, never published as provenance.
+    assert sig.measurements["provenance"] != PROV_VERIFIED
     assert ctx.shared.get("provenance_verified") is not True
+    # Honest outcome: intact signature + untrusted chain -> issuer unconfirmed (route to forensics),
+    # NOT a fabricated "tampering" verdict. The bytes are intact; only the chain isn't pinned.
+    assert sig.status == SignalStatus.NOT_EVALUATED
+    assert sig.measurements["provenance"] == PROV_UNVERIFIED_ISSUER
+    assert sig.measurements["signatures"][0]["intact"] is True
+    assert sig.measurements["signatures"][0]["trusted"] is False
+    assert sig.suspicion is None  # never a fabricated tamper score
 
 
 # --------------------------------------------------------------------------------------------------
@@ -344,14 +358,18 @@ def test_d_unsigned_pdf_is_absent_not_evaluated(anchor_dir):
 # --------------------------------------------------------------------------------------------------
 
 
-def test_verified_is_separated_from_tampered(anchor_dir, pdf_signed_trusted, pdf_signed_attacker):
+def test_verified_is_separated_from_unverified(anchor_dir, pdf_signed_trusted, pdf_signed_attacker):
     az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
     good = az.analyze(_ctx(pdf_signed_trusted))
     bad = az.analyze(_ctx(pdf_signed_attacker))
-    # No constant can satisfy both — this is the §3.2 litmus encoded as an assertion.
-    assert good.suspicion is not None and bad.suspicion is not None
-    assert good.suspicion == 0.0 and bad.suspicion == 1.0
-    assert good.suspicion < bad.suspicion
+    # No constant can satisfy both: a pinned-issuer signature is VERIFIED (clean), while an unpinned
+    # one is NOT_EVALUATED (issuer unconfirmed) — never the same outcome (§3.2 litmus).
+    assert good.status == SignalStatus.VALID and good.suspicion == 0.0
+    assert good.measurements["provenance"] == PROV_VERIFIED
+    assert bad.status == SignalStatus.NOT_EVALUATED
+    assert bad.measurements["provenance"] == PROV_UNVERIFIED_ISSUER
+    # the security invariant: only the pinned-issuer document is source-verified
+    assert good.measurements["provenance"] != bad.measurements["provenance"]
 
 
 def test_no_pinned_anchors_fails_closed(tmp_path, pdf_signed_trusted):
