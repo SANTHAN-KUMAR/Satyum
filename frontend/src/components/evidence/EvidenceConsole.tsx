@@ -1,6 +1,7 @@
 import type { TrustScore } from "@/api/types";
 import { TIER_LABEL } from "@/lib/verdict";
 import { VerdictHero } from "./VerdictHero";
+import { CopilotPanel } from "../Console/CopilotPanel";
 import { ProvenanceCard } from "./ProvenanceCard";
 import { SignalList } from "./SignalList";
 import { ReasonsCard } from "./ReasonsCard";
@@ -58,6 +59,9 @@ export function EvidenceConsole({ trust, previewUrl, isPdf, fileName }: Evidence
     <div className="animate-fade-in space-y-5">
       {/* 1 — dominant verdict + trust score + recommended action */}
       <VerdictHero trust={trust} />
+      
+      {/* 1.5 — LLM Interpretability Copilot */}
+      <CopilotPanel evidencePack={trust.evidence_pack} />
 
       {/* 2 — Layer-0 evidence sufficiency: achievable confidence given the submission */}
       {hasSufficiency && (

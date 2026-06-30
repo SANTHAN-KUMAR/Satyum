@@ -92,13 +92,15 @@ def _is_pdf(data: bytes) -> bool:
     return head.startswith(b"%PDF-")
 
 
-def extract_issuer_from_document(file_bytes: bytes | None) -> tuple[str | None, str]:
+def extract_issuer_from_document(
+    file_bytes: bytes | None, password: str | None = None
+) -> tuple[str | None, str]:
     """Derive the issuing institution from the PDF itself (metadata + page-1 text).
 
     Returns ``(issuer_key | None, evidence)``. Defensive: a missing/garbled/non-PDF input yields
     ``(None, reason)`` and never raises — the red flag then has no document basis (and may fall back
     to an upstream capability hint). This replaces trusting a client-supplied issuer field, which a
-    forger could simply omit to dodge the flag.
+    forger could simply omit to dodge the flag. ``password`` decrypts an encrypted PDF in memory.
     """
     if not file_bytes:
         return None, "no file bytes"
@@ -110,6 +112,8 @@ def extract_issuer_from_document(file_bytes: bytes | None) -> tuple[str | None, 
         return None, "pdf text extraction unavailable (pymupdf missing)"
     try:
         doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+        if doc.needs_pass and password:  # encrypted govt/bank PDF: decrypt in memory (CLAUDE.md §10)
+            doc.authenticate(password)
     except Exception as exc:  # noqa: BLE001 — a malformed PDF yields no issuer, never raises
         logger.info("issuer extraction: unparsable pdf: %r", exc)
         return None, "unparsable pdf"
@@ -148,7 +152,7 @@ class PdfOnlyRedFlagAnalyzer:
     def analyze(self, ctx: AnalysisContext) -> LayerSignal:
         # Derive the issuer FROM THE DOCUMENT first; never let a (possibly absent) client hint be the
         # trigger. The hint may only ADD coverage when the document yields nothing.
-        issuer_key, evidence = extract_issuer_from_document(ctx.file_bytes)
+        issuer_key, evidence = extract_issuer_from_document(ctx.file_bytes, ctx.pdf_password)
         if issuer_key is not None:
             sourceable = issuer_is_sourceable(issuer_key)
         else:

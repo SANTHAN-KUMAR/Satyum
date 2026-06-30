@@ -1,69 +1,97 @@
 import type { Config } from "tailwindcss";
 
 /**
- * Satyum design tokens — "Banking Trust Console" (DESIGN.md)
- * Neutral near-black base, emerald accent, and three unmistakable verdict colours.
+ * Satyum design tokens — monochrome-first (white major, near-black ink), the StartGlobal-style premium
+ * onboarding language. The Indian-flag colours (saffron · navy · India-green) are NO LONGER a base
+ * palette: they appear ONLY as a **linear gradient for highlights** (see index.css `.gradient-*`) and
+ * frosted **glassmorphism** marks emphasis. To keep the whole app monochrome with minimal churn, the
+ * old brand tokens (`navy` / `saffron` / `india`) and `slate` are remapped here to neutral greys — so
+ * any existing utility renders monochrome; colour comes back only through the gradient/glass utilities.
  */
 const config: Config = {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        canvas: "#0a0a0a",
-        surface: "#141414",
-        "surface-hover": "#1f1f1f",
-        "surface-muted": "#0f0f0f",
-        elevated: "#1a1a1a",
-        accent: {
-          DEFAULT: "#10b981", // Emerald
-          hover: "#059669",
-          muted: "#064e3b",
-          fg: "#022c22",
-        },
+        // Canvas + surfaces — white major.
+        canvas: "#FFFFFF",
+        surface: "#FFFFFF",
+        "surface-2": "#F5F5F6",
+        "surface-muted": "#F4F4F5", // light-theme equivalent of main's dark muted panel surface
+        "surface-hover": "#EFEFF1", // hover state for rows/cards in main's console (light theme)
+        hairline: "#E6E6E9",
+        ink: "#0A0A0A",
+
+        // Text scale consumed by main's evidence-console components (text-text-primary/secondary/tertiary).
+        // Remapped from main's dark values to light-theme greys so the console reads correctly on white.
         text: {
-          primary: "#f5f5f5",
-          secondary: "#a3a3a3",
-          tertiary: "#737373",
+          primary: "#0A0A0A", // headings / strong ink
+          secondary: "#3F3F46", // body
+          tertiary: "#71717A", // muted (labels, captions)
         },
-        hairline: "#262626",
-        "hairline-strong": "#404040",
-        
-        // Verdict semantics — locked for backend contract
+
+        // The real flag colours kept ONLY for the gradient utilities (referenced as literals there).
+        // Exposed here too in case a one-off needs a single stop, but components should prefer .gradient-*.
+        grad: { saffron: "#FF9933", navy: "#000080", green: "#138808" },
+
+        // --- Brand tokens REMAPPED to monochrome (so legacy utilities go grey, not flag-coloured) ---
+        navy: { DEFAULT: "#0A0A0A", 600: "#27272A", soft: "#F2F2F4" },
+        saffron: { DEFAULT: "#A1A1AA", deep: "#52525B", soft: "#F2F2F4" },
+        india: { green: "#18181B", "green-text": "#3F3F46", soft: "#F2F2F4" },
+        accent: { DEFAULT: "#0A0A0A", muted: "#52525B" },
+
+        // Verdict semantics — monochrome + the two universally-understood state colours (red/amber),
+        // always paired with icon + label in the UI (never colour alone). APPROVED is treated with the
+        // gradient in components, so its token is a neutral dark (no green).
         verdict: {
-          approved: "#10b981",
-          "approved-soft": "#064e3b",
-          review: "#f59e0b",
-          "review-soft": "#78350f",
-          rejected: "#ef4444",
-          "rejected-soft": "#7f1d1d",
-          pending: "#737373",
-          "pending-soft": "#262626",
+          approved: "#18181B",
+          "approved-soft": "#F2F2F4",
+          review: "#B45309",
+          "review-soft": "#FBF3E8",
+          rejected: "#B91C1C",
+          "rejected-soft": "#FBEAEA",
+          pending: "#52525B",
+          "pending-soft": "#F2F2F4",
+        },
+
+        // `slate-*` remapped to a clean neutral grey scale (text-first).
+        slate: {
+          50: "#FAFAFA",
+          100: "#0A0A0A", // heading ink
+          200: "#18181B",
+          300: "#3F3F46", // body
+          400: "#52525B", // muted (~7:1 on white)
+          500: "#71717A", // secondary muted
+          600: "#71717A",
+          700: "#52525B",
+          800: "#27272A",
+          900: "#18181B",
+          950: "#0A0A0A",
         },
       },
       fontFamily: {
-        sans: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["Geist Mono", "ui-monospace", "SFMono-Regular", "monospace"],
+        sans: ['"Plus Jakarta Sans"', "ui-sans-serif", "system-ui", "sans-serif"],
+        display: ['"Plus Jakarta Sans"', "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
-      borderRadius: {
-        none: "0px",
-        sm: "4px",
-        md: "8px",     // Controls/Inputs
-        lg: "12px",    // Panels/Cards
-        full: "9999px",
+      boxShadow: {
+        card: "0 1px 2px rgba(10,10,20,0.04), 0 8px 28px rgba(10,10,20,0.06)",
+        lift: "0 8px 24px rgba(10,10,20,0.08), 0 24px 60px rgba(10,10,20,0.10)",
+        glass: "0 8px 32px rgba(17,17,26,0.08)",
       },
       keyframes: {
         "fade-in": {
           "0%": { opacity: "0", transform: "translateY(4px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
-        "pulse-ring": {
-          "0%, 100%": { opacity: "0.4" },
-          "50%": { opacity: "1" },
+        float: {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-8px)" },
         },
       },
       animation: {
-        "fade-in": "fade-in 0.35s ease-out both",
-        "pulse-ring": "pulse-ring 1.6s ease-in-out infinite",
+        "fade-in": "fade-in 0.4s ease-out both",
+        float: "float 8s ease-in-out infinite",
       },
     },
   },

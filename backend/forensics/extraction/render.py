@@ -64,11 +64,26 @@ def _page_image(page, index: int) -> PageImage:
     )
 
 
-def _render_pdf_pages(file_bytes: bytes, max_pages: int) -> list[PageImage]:
+def _authenticate(doc, password: str | None) -> bool:
+    """Unlock an encrypted PDF in memory so its pages can be rendered; return whether it is now readable.
+
+    Government/bank PDFs ship password-locked; the applicant supplies the password and we decrypt without
+    re-saving (original bytes untouched, preserving any signature — CLAUDE.md §10, pdf_crypto.py). NOTE:
+    PyMuPDF's ``needs_pass`` stays truthy even after a successful unlock, so readability is taken from the
+    ``authenticate()`` return code (0 = wrong/no password), not from ``needs_pass``."""
+    if not doc.needs_pass:
+        return True  # not encrypted
+    return bool(password) and bool(doc.authenticate(password))
+
+
+def _render_pdf_pages(file_bytes: bytes, max_pages: int, password: str | None = None) -> list[PageImage]:
     """Render up to ``max_pages`` pages of a PDF — a statement's rows span continuation pages."""
     import pymupdf
 
     doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    if not _authenticate(doc, password):  # locked (no/wrong password) -> cannot read, fail-closed (§4)
+        doc.close()
+        return []
     try:
         n = min(doc.page_count, max_pages) if max_pages > 0 else doc.page_count
         return [_page_image(doc.load_page(i), i) for i in range(n)]
@@ -76,10 +91,13 @@ def _render_pdf_pages(file_bytes: bytes, max_pages: int) -> list[PageImage]:
         doc.close()
 
 
-def _render_pdf(file_bytes: bytes) -> PageImage | None:
+def _render_pdf(file_bytes: bytes, password: str | None = None) -> PageImage | None:
     import pymupdf
 
     doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    if not _authenticate(doc, password):  # locked (no/wrong password) -> cannot read, fail-closed (§4)
+        doc.close()
+        return None
     try:
         if doc.page_count < 1:
             return None
@@ -124,7 +142,7 @@ def render_page(ctx: AnalysisContext) -> tuple[PageImage | None, str]:
     ERROR. Never persists anything (CLAUDE.md §10).
     """
     if ctx.file_bytes is not None and is_pdf(ctx.file_bytes):
-        page = _render_pdf(ctx.file_bytes)
+        page = _render_pdf(ctx.file_bytes, ctx.pdf_password)
         return (page, "pdf_page_1") if page is not None else (None, "pdf has no renderable pages")
 
     if ctx.file_bytes is not None:
@@ -155,7 +173,7 @@ def render_pages(ctx: AnalysisContext, *, max_pages: int) -> tuple[list[PageImag
     (uploaded image, camera frame) are inherently single-page and fall back to :func:`render_page`.
     """
     if ctx.file_bytes is not None and is_pdf(ctx.file_bytes):
-        pages = _render_pdf_pages(ctx.file_bytes, max_pages)
+        pages = _render_pdf_pages(ctx.file_bytes, max_pages, ctx.pdf_password)
         if not pages:
             return [], "pdf has no renderable pages"
         return pages, f"pdf_{len(pages)}_page(s)"

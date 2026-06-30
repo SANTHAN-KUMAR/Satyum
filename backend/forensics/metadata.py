@@ -209,9 +209,13 @@ def count_incremental_updates(raw: bytes) -> int:
     return max(0, generations - 1)
 
 
-def analyze_structure(raw: bytes) -> StructureFindings:
+def analyze_structure(raw: bytes, password: str | None = None) -> StructureFindings:
     """Pure analysis: parse PDF structure/metadata and assemble typed findings. May raise on a
-    fundamentally unparsable PDF (caller converts that to a fail-closed ERROR)."""
+    fundamentally unparsable PDF (caller converts that to a fail-closed ERROR).
+
+    ``password`` decrypts an encrypted (password-protected) PDF for the docinfo read. The byte-level
+    incremental-update / shadow-attack scan above runs on the RAW (still-encrypted) bytes — the PDF
+    structure markers it looks for are never encrypted — so it is unaffected (CLAUDE.md §10)."""
     findings = StructureFindings()
 
     # 1) Incremental-update / xref-generation count — from the RAW intake bytes (see docstring).
@@ -233,8 +237,9 @@ def analyze_structure(raw: bytes) -> StructureFindings:
             "(post-edit / shadow-attack indicator)"
         )
 
-    # 2) Open with pikepdf (qpdf) — defensive parse, no render, no JS, no network.
-    with pikepdf.Pdf.open(io.BytesIO(raw)) as pdf:
+    # 2) Open with pikepdf (qpdf) — defensive parse, no render, no JS, no network. ``password=""`` is
+    #    the correct no-op for an unencrypted PDF; a real password decrypts an encrypted one in memory.
+    with pikepdf.Pdf.open(io.BytesIO(raw), password=password or "") as pdf:
         docinfo = pdf.docinfo
         producer = docinfo.get(pikepdf.Name.Producer)
         creator = docinfo.get(pikepdf.Name.Creator)
@@ -352,7 +357,7 @@ class PdfStructureAnalyzer:
             )
 
         try:
-            findings = analyze_structure(raw)
+            findings = analyze_structure(raw, password=ctx.pdf_password)
         except pikepdf.PdfError as exc:  # genuinely unparsable PDF -> fail-closed
             return LayerSignal.error(
                 self.name, self.layer, self.mode, f"unparsable PDF: {exc}"

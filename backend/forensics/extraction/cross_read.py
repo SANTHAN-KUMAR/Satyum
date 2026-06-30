@@ -225,30 +225,32 @@ class CrossReadEnsemble:
     ) -> CrossReadOutcome:
         """Re-read the figure from the digital PDF's exact text layer (no OCR, box-imprecision tolerant).
 
-        Two-stage, fail-closed and laundering-safe:
-          1. **Localized** — if the claim carries a box, read the numbers printed *at that cell*. A match
-             confirms (AGREE); a *different* number printed there is a laundering/misread signal and wins
-             (DISAGREE, held pending) — the box was usable, so we trust what is actually printed there.
-          2. **Page-level fallback** — only when the box was unusable (no number found at the cell, or no
-             box at all, e.g. a reader that emits no grounding). Confirm the value is printed *somewhere*
-             on the page: weaker localization, but it still defeats a value the model invented to make the
-             arithmetic reconcile (an invented figure is printed nowhere). A value printed nowhere → held.
+        Box-grounded and fail-closed (the charter requires every trusted figure to be box-grounded):
+          * **ungrounded** — no bounding box → we cannot localize the re-read → held pending. A reader
+            that does not ground a figure never earns trust for it (ADR-004 §5; the box-grounding rule).
+          1. **Localized** — read the numbers printed *at the claim's cell*. A match confirms (AGREE); a
+             *different* number printed there is a laundering/misread signal and wins (DISAGREE, held).
+          2. **Imprecise-box recovery** — only when the box was provided but landed on no number (VLM box
+             off by more than the pad): confirm the value is printed *somewhere* on the page. The reader
+             DID attempt grounding; this still defeats a value the model invented to reconcile (printed
+             nowhere → held), without trusting a wholly ungrounded claim.
         """
         tol = Decimal(str(tolerance))
-        if norm_bbox is not None:
-            region = numbers_in_region(text_words, norm_bbox)
-            if region:
-                reads = {"pdf-text": [str(n) for n in region]}
-                if any(abs(n - claimed) <= tol for n in region):
-                    return CrossReadOutcome(True, f"PDF text layer confirms {claimed} at this cell", reads)
-                return CrossReadOutcome(
-                    False,
-                    f"PDF text layer shows a different figure than {claimed} at this cell "
-                    "(possible laundering / misread — held pending)",
-                    reads,
-                )
-            # box unusable (nothing read there) → fall through to page-level presence
+        if norm_bbox is None:
+            return CrossReadOutcome(False, "claim has no bounding box to re-read (ungrounded)")
 
+        region = numbers_in_region(text_words, norm_bbox)
+        if region:
+            reads = {"pdf-text": [str(n) for n in region]}
+            if any(abs(n - claimed) <= tol for n in region):
+                return CrossReadOutcome(True, f"PDF text layer confirms {claimed} at this cell", reads)
+            return CrossReadOutcome(
+                False,
+                f"PDF text layer shows a different figure than {claimed} at this cell "
+                "(possible laundering / misread — held pending)",
+                reads,
+            )
+        # box provided but nothing read at the cell (imprecise box) → page-level presence recovery
         page_nums = numbers_in_region(text_words, None)
         reads = {"pdf-text-page": [str(n) for n in page_nums[:50]]}
         if not page_nums:

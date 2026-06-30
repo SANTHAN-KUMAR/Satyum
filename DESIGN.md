@@ -102,6 +102,7 @@ It should look like a modern Bloomberg Terminal or institutional banking softwar
 ## Do's and Don'ts
 - **DO** use human-focused, clear banking language (see `lib/copy.ts`).
 - **DON'T** use engineer jargon like "verification waterfall", "fail-closed", or "treated as hostile" in user-facing copy.
+- **DO** present the underwriter copilot / narrative panel (`components/Console/CopilotPanel.tsx`) as a plain-English *explanation* of the verdict — never as something that decides it. Its 3-paragraph summary and Q&A are read-only and firewalled off the verdict (ADR-006); the copy should make clear the deterministic decision is final.
 - **DO** use emerald for the primary focus/accent to evoke financial trust.
 - **DON'T** use cyan, purple, or neon glows (the "AI dashboard" traps).
 - **DO** maintain strict data alignment.

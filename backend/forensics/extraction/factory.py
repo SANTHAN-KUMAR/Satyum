@@ -24,12 +24,16 @@ from forensics.extraction.fallback import FallbackExtractor
 from forensics.extraction.gemini_extractor import GeminiVLMExtractor
 from forensics.extraction.groq_extractor import GroqVLMExtractor
 from forensics.extraction.interface import VLMExtractor
+from forensics.extraction.openai_compatible_extractor import OpenAICompatibleVLMExtractor
 from forensics.extraction.routing import FAMILY_INDIC, LanguageRoutedExtractor
 
 logger = logging.getLogger(__name__)
 
 # Providers whose clients are implemented + verified against their SDKs.
-_IMPLEMENTED = {"anthropic", "gemini", "groq"}
+_IMPLEMENTED = {
+    "anthropic", "gemini", "groq",
+    "cloudflare", "openai_compatible", "openrouter", "together", "deepinfra", "fireworks", "ollama",
+}
 # Recognised but not yet wired (honest gate, not a fake client). See module docstring.
 _GATED = {"sarvam"}
 
@@ -67,6 +71,35 @@ def _make_extractor(
             api_key=api_key,
             max_tokens=settings.vlm_max_tokens,
             timeout=settings.vlm_timeout_seconds,
+            handled_scripts=handled_scripts,
+        )
+    if provider == "cloudflare":
+        acct = (settings.vlm_cloudflare_account_id or "").strip()
+        if not acct:
+            logger.warning("VLM provider 'cloudflare' needs SATYUM_VLM_CLOUDFLARE_ACCOUNT_ID — gating")
+            return None
+        return OpenAICompatibleVLMExtractor(
+            base_url=f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/v1",
+            model=model or "@cf/mistralai/mistral-small-3.1-24b-instruct",
+            api_key=api_key,
+            label="cloudflare",
+            timeout=settings.vlm_timeout_seconds,
+            max_tokens=settings.vlm_max_tokens,
+            handled_scripts=handled_scripts,
+        )
+    if provider in ("openai_compatible", "openrouter", "together", "deepinfra", "fireworks", "ollama"):
+        base = (settings.vlm_base_url or "").strip()
+        if not base:
+            logger.warning("VLM provider %r needs SATYUM_VLM_BASE_URL — gating", provider)
+            return None
+        return OpenAICompatibleVLMExtractor(
+            base_url=base,
+            model=model,
+            api_key=api_key,
+            label=provider,
+            timeout=settings.vlm_timeout_seconds,
+            max_tokens=settings.vlm_max_tokens,
+            require_key=(provider != "ollama"),  # a local Ollama endpoint needs no API key
             handled_scripts=handled_scripts,
         )
     if provider in _GATED:

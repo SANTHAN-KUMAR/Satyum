@@ -1,22 +1,22 @@
 # Satyum Discrimination Report
 
-Generated: 2026-06-30T11:17:02.466943
+Generated: 2026-06-30T14:42:46.527211
 
 | # | File | Category | Verdict | Score | Key Signal | Description |
 |---|------|----------|---------|-------|------------|-------------|
-| 1 | `canara_direct/genuine.pdf` | genuine | REVIEW | 80.0 | `font_layout(1.00)` | Genuine Canara statement (pdf) |
-| 2 | `canara_direct/genuine.png` | genuine | REVIEW | 71.4 | `font_layout(1.00)` | Genuine Canara statement (png) |
-| 3 | `canara_direct/tamper_salary_inflate.pdf` | tampered | REVIEW | 80.0 | `font_layout(1.00)` | Tampered: RTGS credit inflated 5.8L→8.8L (pdf) |
-| 4 | `canara_direct/tamper_salary_inflate.png` | tampered | REVIEW | 71.4 | `font_layout(1.00)` | Tampered: RTGS credit inflated 5.8L→8.8L (png) |
-| 5 | `canara_direct/tamper_closing_balance.pdf` | tampered | REVIEW | 80.0 | `font_layout(1.00)` | Tampered: Closing balance edited 22K→52K (pdf) |
-| 6 | `canara_direct/tamper_closing_balance.png` | tampered | REVIEW | 71.4 | `font_layout(1.00)` | Tampered: Closing balance edited 22K→52K (png) |
-| 7 | `canara_direct/tamper_debit_remove.pdf` | tampered | REVIEW | 80.0 | `font_layout(1.00)` | Tampered: Debit zeroed out (pdf) |
-| 8 | `canara_direct/tamper_debit_remove.png` | tampered | REVIEW | 71.4 | `font_layout(1.00)` | Tampered: Debit zeroed out (png) |
-| 9 | `canara_direct/tamper_partial_recompute.pdf` | tampered | REVIEW | 80.0 | `font_layout(1.00)` | Tampered: Credit+balance edited, next row breaks (pdf) |
-| 10 | `canara_direct/tamper_partial_recompute.png` | tampered | REVIEW | 71.4 | `font_layout(1.00)` | Tampered: Credit+balance edited, next row breaks (png) |
-| 11 | `canara_direct/tamper_opening_balance.pdf` | tampered | REVIEW | 80.0 | `font_layout(1.00)` | Tampered: Opening balance fabricated 0→50K (pdf) |
-| 12 | `canara_direct/tamper_opening_balance.png` | tampered | REVIEW | 71.4 | `font_layout(1.00)` | Tampered: Opening balance fabricated 0→50K (png) |
-| 13 | `canara_cams/genuine.pdf` | cams_layout | REVIEW | 71.9 | `pdf_only_red_flag(0.55)` | CAMSfinserv genuine (pdf) |
+| 1 | `canara_direct/genuine.pdf` | genuine | REVIEW | 83.3 | `font_layout(0.84)` | Genuine Canara statement (pdf) |
+| 2 | `canara_direct/genuine.png` | genuine | REVIEW | 76.1 | `font_layout(0.84)` | Genuine Canara statement (png) |
+| 3 | `canara_direct/tamper_salary_inflate.pdf` | tampered | REVIEW | 83.3 | `font_layout(0.84)` | Tampered: RTGS credit inflated 5.8L→8.8L (pdf) |
+| 4 | `canara_direct/tamper_salary_inflate.png` | tampered | REVIEW | 76.1 | `font_layout(0.84)` | Tampered: RTGS credit inflated 5.8L→8.8L (png) |
+| 5 | `canara_direct/tamper_closing_balance.pdf` | tampered | REVIEW | 83.3 | `font_layout(0.84)` | Tampered: Closing balance edited 22K→52K (pdf) |
+| 6 | `canara_direct/tamper_closing_balance.png` | tampered | REVIEW | 76.1 | `font_layout(0.84)` | Tampered: Closing balance edited 22K→52K (png) |
+| 7 | `canara_direct/tamper_debit_remove.pdf` | tampered | REVIEW | 83.3 | `font_layout(0.84)` | Tampered: Debit zeroed out (pdf) |
+| 8 | `canara_direct/tamper_debit_remove.png` | tampered | REVIEW | 76.1 | `font_layout(0.84)` | Tampered: Debit zeroed out (png) |
+| 9 | `canara_direct/tamper_partial_recompute.pdf` | tampered | REVIEW | 83.3 | `font_layout(0.84)` | Tampered: Credit+balance edited, next row breaks (pdf) |
+| 10 | `canara_direct/tamper_partial_recompute.png` | tampered | REVIEW | 76.1 | `font_layout(0.84)` | Tampered: Credit+balance edited, next row breaks (png) |
+| 11 | `canara_direct/tamper_opening_balance.pdf` | tampered | REVIEW | 83.3 | `font_layout(0.84)` | Tampered: Opening balance fabricated 0→50K (pdf) |
+| 12 | `canara_direct/tamper_opening_balance.png` | tampered | REVIEW | 76.1 | `font_layout(0.84)` | Tampered: Opening balance fabricated 0→50K (png) |
+| 13 | `canara_cams/genuine.pdf` | cams_layout | REVIEW | 69.0 | `pdf_only_red_flag(0.55)` | CAMSfinserv genuine (pdf) |
 | 14 | `canara_cams/genuine.png` | cams_layout | REVIEW | 65.7 | `font_layout(1.00)` | CAMSfinserv genuine (png) |
 | 15 | `canara_cams/tamper_amount_inflate.pdf` | cams_layout | REVIEW | 69.0 | `pdf_only_red_flag(0.55)` | CAMSfinserv tamper_amount_inflate (pdf) |
 | 16 | `canara_cams/tamper_amount_inflate.png` | cams_layout | REVIEW | 65.7 | `font_layout(1.00)` | CAMSfinserv tamper_amount_inflate (png) |

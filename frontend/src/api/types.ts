@@ -68,6 +68,20 @@ export interface PendingSignal {
 }
 
 /**
+ * risk/evidence.py :: build_evidence_pack network_intelligence[] — a Layer-3 advisory FINDING, never a
+ * verdict (PROPOSAL-001 §5.4/§8.4). Surfaced to the underwriter as context; it never auto-declines and
+ * never entered the deterministic score. Optional on the pack until the federation backend is wired.
+ */
+export interface NetworkIntelligenceFinding {
+  source: string; // "fraud_registry" | "ring_evidence" | "campaign_resemblance"
+  suspicion: number;
+  confidence: number;
+  explanation: string;
+  note: string; // "finding — not a verdict (advisory; never auto-declines, never clears)"
+  measurements: Record<string, unknown>;
+}
+
+/**
  * risk/evidence.py :: build_evidence_pack(...) return value.
  * This is the auditable case file the underwriter acts on.
  */
@@ -85,6 +99,10 @@ export interface EvidencePack {
   signals: EvidencePackSignal[];
   pending_not_evaluated: PendingSignal[];
   tamper_evidence_regions: TamperEvidenceRegion[];
+  // Layer-3 advisory findings + the purely-deterministic sub-score. Optional: present only once the
+  // federation backend (registry/ring) is wired onto main; absent responses guard with `?? []`.
+  network_intelligence?: NetworkIntelligenceFinding[];
+  deterministic_subscore?: number | null;
   privacy_note: string;
 }
 

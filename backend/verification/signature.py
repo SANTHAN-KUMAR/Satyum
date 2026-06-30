@@ -149,6 +149,49 @@ def _timestamp_info(status: Any) -> dict[str, Any] | None:
     }
 
 
+def _cn(name: Any) -> str | None:
+    """Extract the common_name from an asn1crypto x509.Name, defensively (best-effort, never fatal)."""
+    try:
+        native = name.native  # OrderedDict of relative distinguished names
+    except Exception:  # noqa: BLE001 — metadata extraction must never break verification
+        return None
+    if not isinstance(native, dict):
+        return None
+    cn = native.get("common_name")
+    if isinstance(cn, list):
+        return str(cn[0]) if cn else None
+    return str(cn) if cn is not None else None
+
+
+def _signer_identity(emb: Any, status: Any | None) -> dict[str, str | None]:
+    """Best-effort signer subject/issuer CN from the validation status or the embedded signature.
+
+    This is metadata for the "issued by X" trust badge ONLY — it never affects the verdict, which is
+    the chain-to-anchor decision. Any failure yields ``None`` values. The exact pyHanko attribute
+    (``status.signing_cert`` vs ``emb.signer_cert``) is probed defensively so a version difference
+    degrades to "issuer unknown", never an error.
+    """
+    cert = None
+    candidates = []
+    if status is not None:
+        candidates.append(lambda: status.signing_cert)
+    candidates.append(lambda: emb.signer_cert)
+    for getter in candidates:
+        try:
+            c = getter()
+        except Exception:  # noqa: BLE001 — probe; missing attribute is expected on some versions
+            continue
+        if c is not None:
+            cert = c
+            break
+    if cert is None:
+        return {"subject_cn": None, "issuer_cn": None}
+    return {
+        "subject_cn": _cn(getattr(cert, "subject", None)),
+        "issuer_cn": _cn(getattr(cert, "issuer", None)),
+    }
+
+
 class PadesSignatureAnalyzer:
     """Verify embedded PAdES/CMS signatures on a PDF, chaining to a pinned trust anchor.
 
@@ -227,6 +270,18 @@ class PadesSignatureAnalyzer:
 
         try:
             reader = PdfFileReader(io.BytesIO(ctx.file_bytes), strict=False)
+            # Encrypted (password-protected) PDF: decrypt IN MEMORY with the applicant-supplied password
+            # so the ORIGINAL signed bytes are read unmodified. This is what preserves the signature — a
+            # 3rd-party "remove password" tool re-saves the file and destroys the /ByteRange coverage
+            # (CLAUDE.md §10; verification/pdf_crypto.py). No password for an encrypted doc -> the API
+            # gates to NEEDS_PASSWORD upstream and this analyzer never runs.
+            if reader.encrypted:
+                if not ctx.pdf_password:
+                    return LayerSignal.not_evaluated(
+                        self.name, self.layer, self.mode,
+                        "PDF is password-protected — password required to verify the signature",
+                    )
+                reader.decrypt(ctx.pdf_password)
             embedded = list(reader.embedded_signatures)
         except Exception as exc:  # noqa: BLE001 — malformed PDF is ordinary bad input, fail-closed
             logger.warning("could not parse PDF for signature extraction: %r", exc)
@@ -338,6 +393,15 @@ class PadesSignatureAnalyzer:
         if verified:
             # Source-of-truth answered at the PKI root: publish for downstream analyzers / red-flag.
             ctx.shared["provenance_verified"] = True
+            # Best-effort signer identity for the "issued by X" trust badge (metadata only — never the
+            # verdict). Consumed by providers/digilocker.py for the DigiLocker issuer label.
+            identity = _signer_identity(embedded[0], None)
+            ctx.shared["signer_identity"] = {
+                "subject_cn": identity["subject_cn"],
+                "issuer_cn": identity["issuer_cn"],
+            }
+            measurements["signer_subject_cn"] = identity["subject_cn"]
+            measurements["signer_issuer_cn"] = identity["issuer_cn"]
             ts0 = per_sig[0].get("timestamp")
             ts_note = f"; RFC3161 timestamp validated ({ts0['time']})" if ts0 and ts0.get("trusted") else ""
             return LayerSignal.valid(

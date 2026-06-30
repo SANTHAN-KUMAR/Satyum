@@ -35,8 +35,11 @@ from starlette.concurrency import run_in_threadpool
 
 from app.bundle import verify_bundle
 from app.config import settings
-from app.contracts import AnalysisContext, BundleTrustScore, Mode, TrustScore
+from app.contracts import AnalysisContext, BundleTrustScore, Mode, PasswordRequired, TrustScore
 from app.orchestrator import run_verification
+from federation.service import advise_from_context
+from risk.engine import attach_advisory
+from verification.pdf_crypto import is_pdf_encrypted, password_unlocks
 from verification.provenance import issuer_is_sourceable
 
 log = structlog.get_logger(__name__)
@@ -76,13 +79,16 @@ def _looks_like_document(data: bytes) -> bool:
 # POST /api/verify — file intake
 # ---------------------------------------------------------------------------------------------
 
-@router.post("/api/verify", response_model=TrustScore)
+@router.post("/api/verify", response_model=None)
 async def verify_file(
     request: Request,
     file: UploadFile = File(...),  # noqa: B008 — FastAPI's declarative default pattern
     doc_type: str | None = Form(default=None),
     issuer_hint: str | None = Form(default=None),
-) -> TrustScore:
+    claimed_pan: str | None = Form(default=None),    # applicant-typed PAN → cross-checked vs the document
+    features_json: str | None = Form(default=None),  # engineered features for analyst-approved rules
+    pdf_password: str | None = Form(default=None),   # unlocks an encrypted (password-protected) PDF
+) -> TrustScore | PasswordRequired:
     """Verify an uploaded document and return the :class:`TrustScore` (incl. the evidence pack).
 
     Pipeline: size/type guard → build a FILE-mode :class:`AnalysisContext` → run the verification
@@ -118,6 +124,19 @@ async def verify_file(
             detail="payload is not a recognised PDF or image document",
         )
 
+    # --- gate 5: password-protected PDF ----------------------------------------------------
+    # Govt/bank PDFs (Aadhaar, CAMS, signed e-statements) ship encrypted. This is NOT a fraud signal —
+    # it is a recoverable prompt. We take the password in-app and decrypt IN MEMORY (preserving the
+    # signature) rather than the user round-tripping through a 3rd-party unlock that breaks it (§10).
+    if is_pdf_encrypted(raw):
+        if not (pdf_password and pdf_password.strip()):
+            return PasswordRequired(file_name=file.filename)
+        if not password_unlocks(raw, pdf_password):
+            return PasswordRequired(
+                file_name=file.filename,
+                password_error="Incorrect password — please check and try again.",
+            )
+
     session = request.app.state.sessions
     registry = request.app.state.registry
     ledger = request.app.state.ledger
@@ -134,6 +153,23 @@ async def verify_file(
         file_mime=file.content_type,
         source_was_pullable=source_was_pullable,
     )
+
+    # Applicant-claimed identity + engineered features (from onboarding) feed two deterministic
+    # analyzers: ClaimedIdentityAnalyzer cross-checks a typed PAN against the PAN extracted from the
+    # document; PromotedRuleAnalyzer fires analyst-approved rules over the features. Both are optional —
+    # absent fields simply leave those analyzers NOT_EVALUATED (never an error).
+    if pdf_password and pdf_password.strip():
+        ctx.pdf_password = pdf_password  # held only for this request; never logged/persisted (§10)
+    if claimed_pan and claimed_pan.strip():
+        ctx.claimed_identity = {"pan": claimed_pan.strip().upper()}
+    if features_json:
+        try:
+            parsed = json.loads(features_json)
+            if isinstance(parsed, dict):
+                ctx.features = parsed
+        except (json.JSONDecodeError, ValueError):
+            bound_pre = log.bind(session_id=ctx.session_id)
+            bound_pre.warning("verify.features_json.invalid")  # ignore malformed features, never fail
 
     bound = log.bind(session_id=ctx.session_id, intake_mode="FILE", doc_type=doc_type)
     bound.info(
@@ -152,6 +188,25 @@ async def verify_file(
         # File bytes are not needed after scoring — release them immediately (§10).
         session.mark_scored(ctx.session_id)
         ctx.file_bytes = None
+
+    # --- Layer-3 advisory consult (PROPOSAL-001 §5.4) — non-authoritative, fail-open --------------
+    # Consult the shared fraud registry with artifacts the deterministic core already published into
+    # ctx.shared (pHash / entities). A confirmed cross-bank match can raise an APPROVED case to human
+    # REVIEW — it NEVER clears a document and NEVER changes the deterministic score (attach_advisory).
+    fraud_registry = getattr(request.app.state, "fraud_registry", None)
+    if fraud_registry is not None:
+        try:
+            advisories = advise_from_context(
+                fraud_registry,
+                ctx.shared,
+                salt_hex=settings.federation_consortium_salt_hex,
+                pepper=settings.federation_entity_pepper.encode("utf-8"),
+                hamming_threshold=settings.phash_hamming_threshold,
+            )
+            if advisories:
+                trust = attach_advisory(trust, advisories)
+        except Exception as exc:  # noqa: BLE001 — advisory must NEVER break a verdict (fail-open, §4)
+            bound.warning("advisory.consult.error", error=repr(exc))
 
     bound.info(
         "verify.file.scored",

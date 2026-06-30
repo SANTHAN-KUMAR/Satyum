@@ -38,7 +38,10 @@ TEXT_WORDS = (
 
 def _page(text_words=TEXT_WORDS) -> PageImage:
     # 1x1 PNG header is enough; the text-layer path never decodes pixels.
-    png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082")
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+    )
     return PageImage(png_bytes=png, width=1000, height=1000, text_layer="x", text_words=text_words)
 
 
@@ -73,23 +76,24 @@ def test_textlayer_catches_laundered_figure_at_the_cell():
     assert out.agree is False
 
 
-def test_textlayer_page_level_fallback_when_no_box():
-    # A reader that emits no box (Groq): the value is still confirmed present on the page.
+def test_ungrounded_claim_is_never_trusted():
+    # The charter requires box-grounding: a claim with no box cannot be trusted even if its value is
+    # printed on the page (a reader that does not ground a figure never earns trust for it).
     out = _ensemble().verify(None, None, Decimal("295.00"), 1.0, text_words=TEXT_WORDS)
-    assert out.agree is True
-
-
-def test_textlayer_rejects_value_printed_nowhere():
-    # An invented value printed nowhere on the page → held pending, never trusted.
-    out = _ensemble().verify(None, None, Decimal("999999.00"), 1.0, text_words=TEXT_WORDS)
     assert out.agree is False
 
 
-def test_unusable_box_falls_back_to_page_level_presence():
-    # Box points at an empty region (no number there) but the value is printed elsewhere → confirmed
-    # via the page-level fallback rather than falsely held.
+def test_imprecise_box_recovers_via_page_level_presence():
+    # Box was PROVIDED but landed on an empty region (VLM box off); the value is printed elsewhere →
+    # recovered via page-level presence (the reader did attempt grounding). Not a wholly ungrounded claim.
     out = _ensemble().verify(None, (0.05, 0.95, 0.02, 0.02), Decimal("295.00"), 1.0, text_words=TEXT_WORDS)
     assert out.agree is True
+
+
+def test_imprecise_box_recovery_rejects_value_printed_nowhere():
+    # Box provided but empty region, AND the value is printed nowhere (invented to reconcile) → held.
+    out = _ensemble().verify(None, (0.05, 0.95, 0.02, 0.02), Decimal("999999.00"), 1.0, text_words=TEXT_WORDS)
+    assert out.agree is False
 
 
 # --- builder integration: faithful figures become trusted, arithmetic runs ----------------------
@@ -108,12 +112,16 @@ def test_faithful_digital_extraction_is_trusted_and_arithmetic_runs():
         ((0.90, 0.55, 0.05, 0.02), "4,705.00"),
     )
     page = _page(words)
+    # Each figure is grounded to the box of its printed word (a capable VLM grounds every value).
     raw = RawExtraction(
         doc_type="BANK_STATEMENT",
-        fields=[ExtractedField(predicate="opening_balance", value="0.00", confidence=0.95, bbox=None)],
+        fields=[ExtractedField(predicate="opening_balance", value="0.00", confidence=0.95,
+                               bbox=(0.40, 0.10, 0.05, 0.02))],
         transactions=[
-            ExtractedTransaction(seq=0, credit=_cell("5000.00"), running_balance=_cell("5000.00")),
-            ExtractedTransaction(seq=1, debit=_cell("295.00"), running_balance=_cell("4705.00")),
+            ExtractedTransaction(seq=0, credit=_cell("5000.00", (0.80, 0.50, 0.05, 0.02)),
+                                 running_balance=_cell("5000.00", (0.90, 0.50, 0.05, 0.02))),
+            ExtractedTransaction(seq=1, debit=_cell("295.00", (0.70, 0.55, 0.05, 0.02)),
+                                 running_balance=_cell("4705.00", (0.90, 0.55, 0.05, 0.02))),
         ],
         model_id="probe", prompt_hash="p",
     )
@@ -140,10 +148,13 @@ def test_tampered_running_balance_breaks_f1_on_digital_extraction():
     page = _page(words)
     raw = RawExtraction(
         doc_type="BANK_STATEMENT",
-        fields=[ExtractedField(predicate="opening_balance", value="0.00", confidence=0.95, bbox=None)],
+        fields=[ExtractedField(predicate="opening_balance", value="0.00", confidence=0.95,
+                               bbox=(0.40, 0.10, 0.05, 0.02))],
         transactions=[
-            ExtractedTransaction(seq=0, credit=_cell("5000.00"), running_balance=_cell("5000.00")),
-            ExtractedTransaction(seq=1, debit=_cell("1000.00"), running_balance=_cell("9000.00")),
+            ExtractedTransaction(seq=0, credit=_cell("5000.00", (0.80, 0.50, 0.05, 0.02)),
+                                 running_balance=_cell("5000.00", (0.90, 0.50, 0.05, 0.02))),
+            ExtractedTransaction(seq=1, debit=_cell("1000.00", (0.70, 0.55, 0.05, 0.02)),
+                                 running_balance=_cell("9000.00", (0.90, 0.55, 0.05, 0.02))),
         ],
         model_id="probe", prompt_hash="p",
     )
@@ -166,19 +177,23 @@ def test_build_multi_renumbers_transactions_and_chains_across_pages():
                 ((0.90, 0.50, 0.05, 0.02), "4,000.00"))
     raw1 = RawExtraction(
         doc_type="BANK_STATEMENT",
-        fields=[ExtractedField(predicate="opening_balance", value="0.00", confidence=0.95, bbox=None)],
-        transactions=[ExtractedTransaction(seq=0, credit=_cell("5000.00"), running_balance=_cell("5000.00"))],
+        fields=[ExtractedField(predicate="opening_balance", value="0.00", confidence=0.95,
+                               bbox=(0.40, 0.10, 0.05, 0.02))],
+        transactions=[ExtractedTransaction(seq=0, credit=_cell("5000.00", (0.80, 0.50, 0.05, 0.02)),
+                                            running_balance=_cell("5000.00", (0.90, 0.50, 0.05, 0.02)))],
         model_id="m", prompt_hash="p",
     )
     raw2 = RawExtraction(
         doc_type="BANK_STATEMENT",
-        transactions=[ExtractedTransaction(seq=0, debit=_cell("1000.00"), running_balance=_cell("4000.00"))],
+        transactions=[ExtractedTransaction(seq=0, debit=_cell("1000.00", (0.70, 0.50, 0.05, 0.02)),
+                                            running_balance=_cell("4000.00", (0.90, 0.50, 0.05, 0.02)))],
         model_id="m", prompt_hash="p",
     )
     builder = ClaimGraphBuilder(_ensemble(), arithmetic_abs_tolerance=settings.arithmetic_abs_tolerance)
     graph = builder.build_multi([(raw1, _page(p1_words)), (raw2, _page(p2_words))], doc_id="d", source="m")
     # page-2's transaction must be renumbered to seq 1 (continues the chain), not collide at seq 0
-    seqs = sorted({c.index for c in graph.claims if c.subject.startswith("transaction_") and c.index is not None})
+    seqs = sorted({c.index for c in graph.claims
+                   if c.subject.startswith("transaction_") and c.index is not None})
     assert seqs == [0, 1]
     domain, results = engine.run(graph, min_confidence=0.5, tolerance=1.0)
     f1 = next(r for r in results if r.rule_id == "F1")
@@ -188,10 +203,12 @@ def test_build_multi_renumbers_transactions_and_chains_across_pages():
 def test_build_multi_dedupes_repeated_header_field():
     words = (((0.40, 0.10, 0.05, 0.02), "0.00"),)
     raw1 = RawExtraction(doc_type="BANK_STATEMENT",
-                         fields=[ExtractedField(predicate="opening_balance", value="0.00", confidence=0.95, bbox=None)],
+                         fields=[ExtractedField(predicate="opening_balance", value="0.00",
+                                                confidence=0.95, bbox=None)],
                          model_id="m", prompt_hash="p")
     raw2 = RawExtraction(doc_type="BANK_STATEMENT",
-                         fields=[ExtractedField(predicate="opening_balance", value="9999.00", confidence=0.95, bbox=None)],
+                         fields=[ExtractedField(predicate="opening_balance", value="9999.00",
+                                                confidence=0.95, bbox=None)],
                          model_id="m", prompt_hash="p")
     builder = ClaimGraphBuilder(_ensemble(), arithmetic_abs_tolerance=settings.arithmetic_abs_tolerance)
     graph = builder.build_multi([(raw1, _page(words)), (raw2, _page(words))], doc_id="d", source="m")

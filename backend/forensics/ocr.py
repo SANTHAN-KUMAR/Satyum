@@ -146,7 +146,7 @@ def is_pdf(data: bytes) -> bool:
     return head.startswith(b"%PDF-")
 
 
-def _render_pdf_page(file_bytes: bytes, dpi: int = RENDER_DPI):
+def _render_pdf_page(file_bytes: bytes, dpi: int = RENDER_DPI, password: str | None = None):
     """Render page 1 of an in-memory PDF to a PIL ``Image`` via PyMuPDF.
 
     Imported lazily so a missing system dep surfaces as an analyzer ERROR (fail-closed), never an
@@ -157,6 +157,8 @@ def _render_pdf_page(file_bytes: bytes, dpi: int = RENDER_DPI):
     from PIL import Image
 
     doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    if doc.needs_pass and password:  # encrypted govt/bank PDF: decrypt in memory (CLAUDE.md §10)
+        doc.authenticate(password)
     try:
         if doc.page_count < 1:
             return None
@@ -177,7 +179,7 @@ def _image_from_context(ctx: AnalysisContext):
     from PIL import Image
 
     if ctx.file_bytes is not None and is_pdf(ctx.file_bytes):
-        img = _render_pdf_page(ctx.file_bytes)
+        img = _render_pdf_page(ctx.file_bytes, password=ctx.pdf_password)
         if img is None:
             return None, "pdf has no renderable pages"
         return img, "pdf_page_1"

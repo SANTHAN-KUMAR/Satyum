@@ -144,6 +144,53 @@ class Provenance(BaseModel):
     tampered: bool = False  # signature present but INVALID == active tampering evidence
 
 
+class AdvisorySignal(BaseModel):
+    """Non-authoritative intelligence from the Collective Intelligence Engine (PROPOSAL-001 §5.4).
+
+    Produced by Layer 3 (the fraud registry / ring evidence / campaign-resemblance), consumed by the
+    risk engine, and surfaced to a **human** — never a silent decision. The firewall invariants
+    (enforced structurally in ``risk.engine.attach_advisory``):
+
+      * it can only ADD suspicion / raise a case for a human — ``APPROVED → REVIEW`` only,
+        **never** ``REVIEW → APPROVE``, never an upgrade, never clears a document;
+      * it is **excluded from the deterministic sub-score** — it never changes the trust-score number;
+      * it is recorded as a separate, labelled line;
+      * a finding with **no explanation is rejected** (no opaque "the model said 91%" — §2.2/§6.3.1).
+
+    ``explanation`` is therefore mandatory and non-empty: a bare score cannot cross this boundary.
+    """
+
+    model_config = {"frozen": True}
+
+    source: str               # "fraud_registry" | "ring_evidence" | "campaign_resemblance"
+    suspicion: float = Field(ge=0.0, le=1.0)   # raises attention only; never lowers
+    explanation: str          # human-readable, MANDATORY (validated non-empty below)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    measurements: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _require_explanation(self) -> AdvisorySignal:
+        if not self.explanation or not self.explanation.strip():
+            raise ValueError(
+                f"AdvisorySignal[{self.source}] must carry a non-empty explanation — "
+                "an opaque score cannot cross the advisory boundary (PROPOSAL-001 §2.2)"
+            )
+        return self
+
+
+class PasswordRequired(BaseModel):
+    """Returned by /api/verify when the upload is a password-protected PDF and no (or a wrong) password
+    was supplied. NOT a verdict — a recoverable prompt: government/bank PDFs (Aadhaar, CAMS, signed
+    e-statements) ship encrypted, so this is expected, never a fraud signal. The applicant enters the
+    password in-app and re-submits; we then decrypt in memory, preserving the signature (CLAUDE.md §10).
+    """
+
+    needs_password: bool = True
+    file_name: str | None = None
+    reason: str = "This document is password-protected. Enter its password to verify it."
+    password_error: str | None = None  # set when a supplied password did not unlock the file
+
+
 class TrustScore(BaseModel):
     """The published verdict the bank's core system consumes."""
 
@@ -157,6 +204,12 @@ class TrustScore(BaseModel):
     signals: list[LayerSignal] = Field(default_factory=list)
     evidence_pack: dict[str, Any] = Field(default_factory=dict)
     fail_closed: bool = False
+    # --- Layer-3 advisory annotation (non-authoritative; see AdvisorySignal) -------------------
+    # The deterministic verdict is composed FIRST; advisory intelligence is attached afterwards as a
+    # clearly-separated, non-authoritative annotation. ``deterministic_subscore`` records the purely
+    # deterministic score (which advisory never changes); ``advisory_annotations`` are the findings.
+    deterministic_subscore: float | None = None
+    advisory_annotations: list[AdvisorySignal] = Field(default_factory=list)
 
 
 class BundleDocument(BaseModel):
@@ -204,10 +257,21 @@ class AnalysisContext:
     file_bytes: bytes | None = None
     file_name: str | None = None
     file_mime: str | None = None
+    # Password for an encrypted (password-protected) PDF — DigiLocker/Aadhaar/CAMS/bank e-statements
+    # ship locked. Supplied by the applicant in-app and used to decrypt IN MEMORY so the original signed
+    # bytes are never re-saved (a 3rd-party "unlock" re-writes the file and destroys the signature). Held
+    # only for the request, never logged or persisted (CLAUDE.md §10).
+    pdf_password: str | None = None
     # CAMERA intake — a short rolling buffer of recent frames (BGR np.ndarray)
     frames: list[Any] = field(default_factory=list)
     # capability map: which issuer/source could have been verified for this doc (red-flag logic)
     source_was_pullable: bool = False
+    # engineered application/behavioural features (employer_age_months, loan_amount, submit_hour, …) for
+    # human-approved promoted rules (Stage 3, §6.3.1) — a consented data surface, never document content.
+    features: dict[str, Any] = field(default_factory=dict)
+    # Applicant-CLAIMED identity (what they typed in onboarding, e.g. {"pan": "ABCPK1234L"}). Cross-
+    # checked against the identity EXTRACTED from the document — a typed PAN that doesn't match is flagged.
+    claimed_identity: dict[str, str] = field(default_factory=dict)
     # shared derived artifacts (e.g. shared["rectified"], shared["ocr"]); analyzer-populated
     shared: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=lambda: time.monotonic())

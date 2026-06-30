@@ -99,6 +99,49 @@ rule trusts it.
 
 ### In-person escalation — live capture, the active 3D challenge (Live capture tab) — see §4.
 
+### Interpretability — the narrator & underwriter copilot (read-only, firewalled)
+
+After any verification completes, the console can explain the verdict in plain English and answer
+follow-up questions — **without that explanation ever being able to change the verdict**
+([ADR-006](architecture/ADR-006-interpretability-and-resilience.md)).
+
+- **Narrator:** the evidence pack is rendered as a **3-paragraph plain-English summary** (what was
+  analysed + the verdict · the key findings, jargon translated · the recommended action). API:
+  `POST /api/interpret/narrative` with the evidence pack.
+- **Copilot:** ask a question (e.g. *"why was this rejected?"*, *"what does the arithmetic finding
+  say?"*) and it answers using **MCP-style read-only tools** over the *frozen* evidence pack
+  (`get_signal_detail`, `get_provenance_detail`, `get_overall_verdict`, …). API: `POST /api/interpret/ask`.
+  Frontend panel: `components/Console/CopilotPanel.tsx`.
+
+**What proves it can't lie:** the **firewall** always overrides the narrative's verdict with the true
+deterministic one and **discards** any narrative whose recommendation contradicts it; on any LLM failure
+it falls back to a deterministic narrative (flagged `is_fallback`). So even a prompt-injected narrator
+can be discarded, never obeyed. The interpreter is decoupled from the vision reader — point
+`SATYUM_INTERPRET_*` at a text reasoner (e.g. DeepSeek v4) while a separate VLM reads (DeepSeek's hosted
+API is text-only, so it narrates but never reads documents).
+
+### Password-protected PDFs — signature-preserving in-memory decrypt (API-level today)
+
+Government/bank PDFs (Aadhaar, CAMS/Karvy CAS, signed e-statements) ship encrypted. Submit one and the
+backend returns a recoverable `{"needs_password": true}` response — **not a fraud signal, not an error**.
+Re-submit with the password (the `pdf_password` form field on `/api/verify`) and the backend **decrypts
+in memory**, never re-saving — so a signed-then-encrypted PDF **still verifies and chains to the pinned
+anchor** (a 3rd-party password remover would re-save the file and destroy the signature). See
+[ADR-006](architecture/ADR-006-interpretability-and-resilience.md) §3.
+
+> Backend and frontend are both implemented and tested (`tests/test_pdf_password.py`, 9 tests). Upload a
+> password-protected PDF in the onboarding flow; when the API returns `needs_password`, an inline field
+> collects the password and resubmits.
+
+### Misparse-resistant arithmetic — a parser error is REVIEW, never a false REJECT
+
+On a real multi-page statement where the deterministic text-layer fallback misreads a balance cell (a
+stray `1` amid lakh-scale balances), Satyum now drops the off-scale figure instead of cascading it into
+a false REJECT: an all-misparse break resolves to `NOT_EVALUATED` (pending → **REVIEW**), while a
+*plausible* edited figure (a real tamper) still flags. This is why the genuine 7-page statement resolves
+to REVIEW, and tamper detection is unchanged (`tests/test_arithmetic.py`,
+[ADR-006](architecture/ADR-006-interpretability-and-resilience.md) §4).
+
 ---
 
 ## 4. The live-camera demo (in-person escalation)
@@ -175,7 +218,11 @@ python samples/generate.py
 - **Tamper-evident audit.** Every verdict is appended to a **hash-chained** ledger; `/api/health`
   reports `audit_chain_intact`. Editing any past record breaks the chain at that row.
 - **Privacy by design.** Camera frames live in memory for the session only and are never persisted;
-  no document bytes or PII are logged; the audit stores decision metadata, not imagery.
+  no document bytes or PII are logged; the audit stores decision metadata, not imagery. Password-locked
+  PDFs are decrypted **in memory** and never re-saved (the password is held only for the request).
+- **The explainer can't decide.** The narrator / copilot is read-only and **firewalled** off the verdict
+  — any narrative that contradicts the deterministic verdict is discarded, and an LLM failure degrades to
+  a deterministic narrative. Even a prompt-injected explainer can never approve a fraud.
 - **The model reads; deterministic rules decide.** **No ML/VLM sits in the decision path** — the VLM
   is an untrusted, box-grounded, cross-read-verified *input* with zero decision authority; cryptography
   + `Decimal` rules + logic set the verdict. Determinism holds **from the claim graph onward**, so the

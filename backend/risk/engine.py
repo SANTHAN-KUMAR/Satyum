@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from app.config import settings
 from app.contracts import (
+    AdvisorySignal,
     LayerSignal,
     Mode,
     Provenance,
@@ -213,6 +214,47 @@ def aggregate(
         tier=tier,
         fail_closed=has_error,
     )
+
+
+def attach_advisory(trust: TrustScore, advisories: list[AdvisorySignal]) -> TrustScore:
+    """Attach Layer-3 advisory intelligence to a finalised deterministic verdict (firewall, §5.4).
+
+    The deterministic verdict is composed FIRST (``aggregate``); this attaches the Collective
+    Intelligence Engine's findings afterwards, under invariants enforced *structurally* here:
+
+      * **Cannot produce an APPROVE.** The only verdict movement it may cause is raising an APPROVED
+        case to human REVIEW (when a finding's suspicion clears ``advisory_review_threshold``). It
+        never upgrades a verdict, never turns REVIEW/REJECTED into APPROVED, never clears a document.
+      * **Never enters the deterministic score.** ``trust_score`` is unchanged; ``deterministic_subscore``
+        records that purely-deterministic number alongside the advisory annotations.
+      * **Fails open.** With no admissible advisory (none supplied, or all without an explanation) the
+        verdict is returned byte-for-byte unchanged — exactly as if Layer 3 were offline.
+
+    This is what lets the engine sit at the centre of the pitch without risking the explainability
+    charter: a poisoned/over-eager intelligence layer can, at most, send a clean case to a human.
+    """
+    admissible = [a for a in advisories if a.explanation and a.explanation.strip()]
+    if not admissible:
+        return trust  # fail-open: no admissible intelligence -> verdict byte-for-byte unchanged
+
+    max_suspicion = max(a.suspicion for a in admissible)
+    new_verdict = trust.verdict
+    # The ONLY movement permitted: raise an APPROVED case to human REVIEW. Never the reverse.
+    if trust.verdict == Verdict.APPROVED and max_suspicion >= settings.advisory_review_threshold:
+        new_verdict = Verdict.REVIEW
+
+    updated = trust.model_copy(
+        update={
+            "verdict": new_verdict,
+            "deterministic_subscore": trust.trust_score,  # score stays purely deterministic (§5.4)
+            "advisory_annotations": admissible,
+        }
+    )
+    # Rebuild the evidence pack so the findings surface as *findings*, not as a verdict.
+    from risk.evidence import build_evidence_pack
+
+    updated.evidence_pack = build_evidence_pack(updated)
+    return updated
 
 
 def _hard_reject_trigger(signals: list[LayerSignal]) -> str | None:

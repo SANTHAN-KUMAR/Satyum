@@ -84,6 +84,35 @@ Three tiers of *trust*, structurally separated — **source of truth** (authorit
 7. **In-person escalation.** For wet-ink / contested *physical* documents, a WebRTC capture mode with
    a server-randomised **active 3D challenge** verified by homography (a flat screen-replay can't
    satisfy it) — re-scoped to escalation, not the financial-statement primary path.
+8. **Interpretability — explain the verdict, never change it.** A **narrator** turns the immutable
+   evidence pack into a 3-paragraph plain-English summary, and an **underwriter copilot** answers
+   follow-up questions via MCP-style read-only tools over the *frozen* pack. A **firewall** discards any
+   narrative that contradicts the deterministic verdict and always overrides with the true one; on any
+   LLM failure it falls back to a deterministic narrative — so the LLM can *never* move a verdict. The
+   interpreter is **decoupled** from the vision reader (a text reasoner such as DeepSeek v4 can narrate
+   while a separate VLM reads). See [ADR-006](architecture/ADR-006-interpretability-and-resilience.md).
+
+### Federated fraud intelligence & source-of-truth providers
+
+Two further capabilities widen Satyum from a single-document checker toward an **application-fraud**
+intelligence layer — each kept off the deterministic decision path:
+
+* **Consortium ring detection (advisory).** A cross-bank entity graph over **HMAC-tokenised identifiers**
+  (device / payout account / employer — never raw values, never document content) with **union-find
+  connected components** surfaces fraud *rings* (the same forged document or shared identifier reused
+  across applicants/banks); a fraud-hash registry stores non-invertible salted-pHash + entity-token
+  fingerprints; human-approved promoted rules and an **advisory firewall** can only raise a case to
+  **REVIEW** (APPROVED → REVIEW), never change the score or clear a case — failing open if absent. See
+  [ADR-005](architecture/ADR-005-federated-fraud-intelligence.md). *(Gradient-trained federated
+  **learning** remains the ADR-005 roadmap; the ring graph, registry, and advisory firewall are built.)*
+* **Source-of-truth providers.** A `providers/` layer for Aadhaar offline e-KYC, PAN, DigiLocker, and
+  Account Aggregator pulls. Onboarding is reframed honestly — **PAN is cross-checked against the
+  document**, while the **mobile number is application-record only, not a verification signal** (no
+  fabricated "verified" status). Production live pulls that need an RBI/UIDAI credential stay labeled
+  gates (real substitutes named), never faked.
+* **Identity document types.** The extraction schema now classifies scanned **Aadhaar** and **PAN card**
+  images so ID docs feed the cross-document identity corroboration graph. *(Two minor entity-mapping
+  bugs are recorded as next steps — see "Honest status".)*
 
 ### The VLM trust boundary — why a generative reader is safe in a fraud system
 
@@ -122,8 +151,17 @@ never faked into a green pass. The VLM is an *understanding* layer, **not** a pi
 
 * **Applied PKI, done right** — full chain-to-pinned-anchor validation, `/ByteRange` coverage,
   shadow-attack / incremental-update detection. "A signature exists" is not "a signature is valid."
+* **Signature-preserving decrypt of password-protected PDFs** — government/bank PDFs (Aadhaar, CAMS/
+  Karvy CAS, signed e-statements) ship encrypted; Satyum detects this (a recoverable prompt, not a fraud
+  signal) and decrypts **in memory**, never re-saving — so the digital signature **survives** (a
+  3rd-party "remove password" tool re-saves the file and destroys it). Empirically verified
+  ([ADR-006](architecture/ADR-006-interpretability-and-resilience.md) §3). The onboarding flow collects
+  the password inline and resubmits.
 * **VLM trust boundary** — a generative reader hardened with cross-read consensus, structured-output
   schema, and hostile-input validation of every claim it emits.
+* **Interpretability firewall** — the plain-English narrator / copilot is read-only and structurally
+  barred from moving a verdict (any contradicting narrative is discarded; LLM failure → deterministic
+  fallback), so even a prompt-injected explainer cannot approve a fraud.
 * **Fail-closed everywhere** — any error, timeout, or indeterminate aggregate degrades to REVIEW,
   never auto-APPROVE; a crashing analyzer never crashes the verdict or the stream.
 * **Tamper-evident audit & non-repudiation** — every verdict, its signals, the VLM model id + prompt
@@ -151,7 +189,12 @@ real backend output** — no fabricated UI data.
   contracts, the claim graph, and the `VLMExtractor` / `AnomalyDetector` / rule-pack interfaces.
 * **VLM (understanding):** `VLMExtractor` interface — **cloud (POC):** Claude Sonnet 4.6 (extraction
   default) / Opus 4.8 (hard-doc lane) via the `anthropic` SDK (Gemini 2.x alternative); **self-host
-  (prod):** Qwen2.5-VL-7B via vLLM. Same interface, config-flag swap.
+  (prod):** Qwen2.5-VL-7B via vLLM. Same interface, config-flag swap. **Provider-agnostic:** one
+  OpenAI-compatible reader also serves Cloudflare Workers AI, OpenRouter, Together, DeepInfra, Fireworks,
+  and local Ollama (`SATYUM_VLM_BASE_URL` / `SATYUM_VLM_CLOUDFLARE_ACCOUNT_ID`).
+* **Interpretation LLM (narrator / copilot):** decoupled, **text-only** model behind
+  `SATYUM_INTERPRET_*` (e.g. **DeepSeek v4** — note its hosted API rejects images, so it narrates, never
+  reads); unset → it reuses the reader credential. Read-only, firewalled off the verdict (ADR-006).
 * **Cross-read OCR:** Tesseract (`pytesseract`) now; PaddleOCR for vernacular — the deterministic
   re-reader for numeric consensus.
 * **Crypto / provenance:** pyHanko (PAdES/CMS), pyhanko-certvalidator, cryptography, asn1crypto,
@@ -177,12 +220,24 @@ boundary — what's real and what's a labeled gate is stated, not dressed up:
   Postgres audit ledger (survives a backend restart). The v2 build rehomes the arithmetic engine onto
   the claim graph and adds the VLM/claim-graph layers per
   [ADR-004 §8](architecture/ADR-004-v2-progressive-evidence-architecture.md).
+* **Built and real (this cycle, ADR-006):** the **interpretability layer** — narrator + underwriter
+  copilot with the verdict-preserving **firewall** and deterministic fallback (tested); **password-
+  protected-PDF handling** — detect + validate + **in-memory decrypt that preserves the signature**
+  (9 tests, incl. "signature survives in-memory decrypt"); the **arithmetic misparse cross-read gate**
+  — an off-scale parser misread resolves to `NOT_EVALUATED`/REVIEW instead of a false REJECT, while a
+  plausible edit still flags (tested). Also built (ADR-005 / providers): the consortium **ring graph +
+  fraud-hash registry + advisory firewall**, and the **Aadhaar / PAN / DigiLocker / Account Aggregator**
+  provider layer.
 * **Real-but-scoped:** the land/title and legal/contract rule packs compute genuine rules and return
   `NOT_EVALUATED` for any invariant whose claims or state-tables aren't present — labeled coverage
   bounds, never faked passes.
 * **Labeled gates:** real CCA-India root, CRL/OCSP revocation, and AA/registry live pulls are
   regulatory/credential gates (real substitutes named); the ML anomaly lane is experimental and off by
   default; VLM end-to-end determinism is bounded on the cloud POC and full on self-host; the
-  virtual-camera/sensor check is an honest, low-weight, documented-bypassable gate.
+  virtual-camera/sensor check is an honest, low-weight, documented-bypassable gate; gradient-trained
+  **federated learning** (ADR-005) is roadmap (the ring graph / registry / advisory firewall are built).
+* **Pending next steps (recorded, not hidden):** two minor entity-mapping bugs. (1) The final `doc_type`
+  stays `None` for ID *images* even though the VLM returns `PAN_CARD`, and (2) the `holder_name` claim is
+  not mapped to the `name` entity field.
 * **All scoring weights/thresholds** remain `# DEFAULT — needs calibration` until run against a real
   labeled corpus — **no invented accuracy numbers.**
