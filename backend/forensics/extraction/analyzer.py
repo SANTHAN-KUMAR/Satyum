@@ -131,6 +131,8 @@ class VLMClaimGraphAnalyzer:
 
         # Publish for the deterministic layers (4 rule packs, 6 corroboration, 7 decision brain).
         ctx.shared["claim_graph"] = graph
+        if graph.doc_type and graph.doc_type != "OTHER":
+            ctx.doc_type = graph.doc_type
 
         failures = graph.cross_read_failures()
         evidence = [
