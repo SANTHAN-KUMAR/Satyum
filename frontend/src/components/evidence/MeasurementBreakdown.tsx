@@ -93,7 +93,7 @@ export function MeasurementBreakdown({
   const notes = entries.filter(([k]) => isNarrativeKey(k));
 
   if (entries.length === 0) {
-    return <p className="text-xs text-slate-500">No measurements reported for this signal.</p>;
+    return <p className="text-xs text-text-tertiary">No measurements reported for this signal.</p>;
   }
 
   return (
@@ -111,14 +111,14 @@ export function MeasurementBreakdown({
               >
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Tag tone="warn">{humanKey(v.kind)}</Tag>
-                  {v.index !== null && <span className="text-slate-400">row {v.index}</span>}
+                  {v.index !== null && <span className="text-text-secondary">row {v.index}</span>}
                 </div>
                 <div className="tnum mt-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-                  <span className="text-slate-400">expected</span>
-                  <span className="font-semibold text-slate-100">{formatMoney(v.expected)}</span>
-                  <span className="text-slate-500">but printed</span>
+                  <span className="text-text-secondary">expected</span>
+                  <span className="font-semibold text-text-primary">{formatMoney(v.expected)}</span>
+                  <span className="text-text-tertiary">but printed</span>
                   <span className="font-semibold text-verdict-rejected">{formatMoney(v.printed)}</span>
-                  <span className="text-slate-500">(Δ {formatMoney(v.delta)})</span>
+                  <span className="text-text-tertiary">(Δ {formatMoney(v.delta)})</span>
                 </div>
               </li>
             ))}
@@ -130,16 +130,16 @@ export function MeasurementBreakdown({
         <dl className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
           {scalarEntries.map(([k, val]) => (
             <div key={k} className="flex items-baseline justify-between gap-2 text-xs">
-              <dt className="truncate text-slate-500" title={humanKey(k)}>
+              <dt className="truncate text-text-tertiary" title={humanKey(k)}>
                 {humanKey(k)}
               </dt>
-              <dd className="shrink-0 font-mono text-slate-300">{formatScalar(val)}</dd>
+              <dd className="shrink-0 font-mono text-text-secondary">{formatScalar(val)}</dd>
             </div>
           ))}
           {complexEntries.map(([k, val]) => (
             <div key={k} className="col-span-full flex items-baseline justify-between gap-2 text-xs">
-              <dt className="shrink-0 text-slate-500">{humanKey(k)}</dt>
-              <dd className="truncate text-right font-mono text-slate-300" title={formatScalar(val)}>
+              <dt className="shrink-0 text-text-tertiary">{humanKey(k)}</dt>
+              <dd className="truncate text-right font-mono text-text-secondary" title={formatScalar(val)}>
                 {formatScalar(val)}
               </dd>
             </div>
@@ -148,7 +148,7 @@ export function MeasurementBreakdown({
       )}
 
       {notes.map(([k, val]) => (
-        <p key={k} className="border-l-2 border-hairline pl-2 text-[11px] italic text-slate-500">
+        <p key={k} className="border-l-2 border-hairline pl-2 text-[11px] italic text-text-tertiary">
           {formatScalar(val)}
         </p>
       ))}

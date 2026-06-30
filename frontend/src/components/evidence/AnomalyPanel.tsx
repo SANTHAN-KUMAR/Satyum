@@ -38,7 +38,7 @@ export function AnomalyPanel({ signals }: AnomalyPanelProps) {
       }
       ariaLabel="Layer 5 anomaly intelligence signals"
     >
-      <p className="mb-4 text-[11px] leading-relaxed text-slate-500">
+      <p className="mb-4 text-[11px] leading-relaxed text-text-tertiary">
         Soft signals — these can raise to{" "}
         <span className="font-semibold text-verdict-review">REVIEW</span> but never to REJECT.
         They surface statistical patterns consistent with tampering and warrant underwriter
@@ -46,7 +46,7 @@ export function AnomalyPanel({ signals }: AnomalyPanelProps) {
       </p>
 
       {signals.length === 0 ? (
-        <p className="text-sm text-slate-400">No anomaly signals raised for this document.</p>
+        <p className="text-sm text-text-secondary">No anomaly signals raised for this document.</p>
       ) : (
         <div className="space-y-5">
           {/* Stats backbone — deterministic, higher weight */}
@@ -62,7 +62,7 @@ export function AnomalyPanel({ signals }: AnomalyPanelProps) {
                     <p className="text-xs font-semibold text-verdict-review">
                       {humanKind(sig.kind)}
                     </p>
-                    <p className="mt-0.5 text-xs leading-relaxed text-slate-300">{sig.reason}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-text-secondary">{sig.reason}</p>
                   </div>
                 ))}
               </div>
@@ -74,7 +74,7 @@ export function AnomalyPanel({ signals }: AnomalyPanelProps) {
             <div>
               <div className="mb-2 flex items-center gap-2">
                 <p className="eyebrow">ML lane</p>
-                <span className="flex items-center gap-1 rounded-full border border-hairline bg-canvas/60 px-2 py-0.5 text-[10px] font-medium text-slate-400">
+                <span className="flex items-center gap-1 rounded-full border border-hairline bg-canvas/60 px-2 py-0.5 text-[10px] font-medium text-text-secondary">
                   <FlaskConical size={11} aria-hidden="true" />
                   experimental
                 </span>
@@ -83,11 +83,11 @@ export function AnomalyPanel({ signals }: AnomalyPanelProps) {
                 {mlBacked.map((sig, i) => (
                   <div
                     key={`ml-${sig.kind}-${i}`}
-                    className="rounded-lg border border-hairline bg-surface-2/30 px-3.5 py-2.5 opacity-85"
+                    className="rounded-lg border border-hairline bg-surface-muted/30 px-3.5 py-2.5 opacity-85"
                   >
-                    <p className="text-xs font-semibold text-slate-300">{humanKind(sig.kind)}</p>
-                    <p className="mt-0.5 text-xs leading-relaxed text-slate-400">{sig.reason}</p>
-                    <p className="mt-1.5 text-[10px] italic text-slate-600">
+                    <p className="text-xs font-semibold text-text-secondary">{humanKind(sig.kind)}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-text-secondary">{sig.reason}</p>
+                    <p className="mt-1.5 text-[10px] italic text-text-tertiary">
                       ML lane — experimental · REVIEW-only · not on the decision path
                     </p>
                   </div>

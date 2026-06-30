@@ -50,9 +50,9 @@ export function DocumentPreview({ previewUrl, isPdf, fileName, regions }: Docume
         <div className="relative overflow-hidden rounded-lg border border-hairline bg-black/40">
           {isPdf || !previewUrl ? (
             <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 p-6 text-center">
-              <FileText size={40} strokeWidth={1.5} className="text-slate-500" aria-hidden="true" />
-              <p className="text-sm font-medium text-slate-300">{fileName}</p>
-              <p className="max-w-xs text-xs text-slate-500">
+              <FileText size={40} strokeWidth={1.5} className="text-text-tertiary" aria-hidden="true" />
+              <p className="text-sm font-medium text-text-secondary">{fileName}</p>
+              <p className="max-w-xs text-xs text-text-tertiary">
                 {isPdf
                   ? "PDF intake — page rendering is handled server-side; the flagged regions below reference the analysed page."
                   : "No inline preview available for this intake."}
@@ -62,7 +62,7 @@ export function DocumentPreview({ previewUrl, isPdf, fileName, regions }: Docume
                   {regions.map((r, i) => (
                     <li
                       key={`${r.source}-${i}`}
-                      className="flex items-start gap-2 rounded border border-verdict-rejected/40 bg-verdict-rejected-soft px-2 py-1.5 text-xs text-slate-300"
+                      className="flex items-start gap-2 rounded border border-verdict-rejected/40 bg-verdict-rejected-soft px-2 py-1.5 text-xs text-text-secondary"
                     >
                       <ScanSearch
                         size={13}
@@ -70,8 +70,8 @@ export function DocumentPreview({ previewUrl, isPdf, fileName, regions }: Docume
                         aria-hidden="true"
                       />
                       <span>
-                        <span className="font-medium text-slate-200">{r.label}</span>
-                        <span className="text-slate-500"> · detector: {r.source}</span>
+                        <span className="font-medium text-text-primary">{r.label}</span>
+                        <span className="text-text-tertiary"> · detector: {r.source}</span>
                       </span>
                     </li>
                   ))}
@@ -147,7 +147,7 @@ export function DocumentPreview({ previewUrl, isPdf, fileName, regions }: Docume
                   key={`cap-${r.source}-${i}`}
                   className={cn(
                     "flex items-start gap-2 rounded border px-2 py-1 text-xs",
-                    "border-verdict-rejected/30 bg-verdict-rejected-soft text-slate-300",
+                    "border-verdict-rejected/30 bg-verdict-rejected-soft text-text-secondary",
                   )}
                 >
                   <ScanSearch
@@ -156,8 +156,8 @@ export function DocumentPreview({ previewUrl, isPdf, fileName, regions }: Docume
                     aria-hidden="true"
                   />
                   <span>
-                    <span className="font-medium text-slate-200">{r.label}</span>
-                    <span className="text-slate-500">
+                    <span className="font-medium text-text-primary">{r.label}</span>
+                    <span className="text-text-tertiary">
                       {" "}
                       — detector: {r.source}
                       {r.suspicion != null && ` · suspicion ${r.suspicion.toFixed(2)}`}

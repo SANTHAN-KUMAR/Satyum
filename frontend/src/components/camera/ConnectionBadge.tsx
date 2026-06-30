@@ -10,10 +10,10 @@ interface ConnectionBadgeProps {
  * connection state honestly — never fake data"). "Unreachable" is a first-class, truthful state.
  */
 const COPY: Record<SocketState, { label: string; dot: string; text: string }> = {
-  idle: { label: "Not connected", dot: "bg-slate-500", text: "text-slate-400" },
+  idle: { label: "Not connected", dot: "bg-surface-muted", text: "text-text-secondary" },
   connecting: { label: "Connecting…", dot: "bg-amber-400 animate-pulse", text: "text-amber-300" },
   open: { label: "Connected · /ws/verify", dot: "bg-emerald-400", text: "text-emerald-300" },
-  closed: { label: "Disconnected", dot: "bg-slate-500", text: "text-slate-400" },
+  closed: { label: "Disconnected", dot: "bg-surface-muted", text: "text-text-secondary" },
   unreachable: {
     label: "Backend unreachable",
     dot: "bg-verdict-rejected",

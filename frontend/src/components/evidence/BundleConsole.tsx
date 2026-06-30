@@ -71,14 +71,14 @@ function DocumentRow({ doc }: { doc: BundleDocument }) {
           <theme.Icon size={13} strokeWidth={2.25} aria-hidden="true" />
           {theme.label}
         </span>
-        <span className="text-sm font-medium text-slate-100">{nodeLabel(doc.label)}</span>
+        <span className="text-sm font-medium text-text-primary">{nodeLabel(doc.label)}</span>
         {trust.provenance.verified && <Tag tone="accent">source-verified</Tag>}
         {trust.provenance.tampered && <Tag tone="warn">tampered signature</Tag>}
         <Tag className="ml-auto" title={tier}>
           score {trust.trust_score.toFixed(0)}
         </Tag>
       </div>
-      <p className="mt-1 pl-1 text-xs text-slate-500">{tier}</p>
+      <p className="mt-1 pl-1 text-xs text-text-tertiary">{tier}</p>
 
       <details className="group mt-2 pl-1">
         <summary className="inline-flex cursor-pointer select-none items-center gap-1 text-xs font-medium text-accent/80 hover:text-accent">

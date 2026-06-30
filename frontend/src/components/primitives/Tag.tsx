@@ -12,7 +12,7 @@ interface TagProps {
 /** A small inline metadata tag (producing-mode, layer, method, etc.). */
 export function Tag({ children, tone = "subtle", title, className }: TagProps) {
   const tones: Record<NonNullable<TagProps["tone"]>, string> = {
-    subtle: "border-hairline bg-surface-2 text-slate-300",
+    subtle: "border-hairline bg-surface-muted text-text-secondary",
     accent: "border-accent/40 bg-accent/10 text-accent",
     warn: "border-verdict-review/40 bg-verdict-review-soft text-verdict-review",
   };

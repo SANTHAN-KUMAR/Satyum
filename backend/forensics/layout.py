@@ -58,7 +58,12 @@ _IDENTITY_DOC_TYPES: frozenset[str] = frozenset({"AADHAAR", "PAN_CARD"})
 
 # --- Detector tunables. DEFAULT — needs calibration on a real corpus (CLAUDE.md §5). ----------
 MIN_WORD_CHARS = 3          # 1-2 char tokens have unstable geometry -> excluded from flagging
-MIN_OCR_CONF = 0.0          # words below this confidence are excluded (unreliable geometry)
+# A word the OCR is not confident it read has unreliable geometry — its bbox/height can be wildly
+# wrong (e.g. a conf-0 garbage token measured at x-height z=+15), which would otherwise dominate the
+# suspicion. The docstring's "low-OCR-confidence words are excluded" was inert at 0.0; gate at a real
+# floor so only confidently-read words are assessed. DEFAULT — needs calibration; chosen well below
+# genuine machine-print confidence (~0.9) so it removes only unreliable reads, not real text.
+MIN_OCR_CONF = 0.5
 MIN_WORDS_PER_LINE = 4      # need a stable per-line median before an outlier call is trustworthy
 ROBUST_Z_FLAG = 3.0         # robust z (via MAD) beyond this on any feature = outlier
 # Typography tolerances are RELATIVE to glyph size: a deviation only matters as a fraction of the
@@ -223,6 +228,7 @@ def analyze_layout(words: list[dict[str, Any]], gray: np.ndarray | None) -> Layo
         else:
             z_stroke = np.zeros(len(line_words))
 
+        line_flags: list[WordGeom] = []
         for i, g in enumerate(line_words):
             g.z_baseline = float(z_base[i])
             g.z_height = float(z_height[i])
@@ -235,9 +241,24 @@ def analyze_layout(words: list[dict[str, Any]], gray: np.ndarray | None) -> Layo
                 g.reasons.append(f"stroke z={g.z_stroke:+.1f}")
             if g.reasons:
                 g.flagged = True
+                line_flags.append(g)
+
+        # Isolated-outlier discipline (the discriminating premise): a spliced/retyped field is a LONE
+        # typographic outlier on an otherwise-uniform line. When a *majority* of a line's words are
+        # "outliers", the line is not a set of edits — it is a uniformly-distinct row (a bold column
+        # header, a differently-set total line). The robust median already tolerates a minority; here we
+        # additionally refuse to call a whole styled row tampering. A real single-field edit (1 of >=4
+        # words) is unaffected; the header false positive (3 of 3) is suppressed. Not corpus-tuned — the
+        # boundary is "is the anomaly the exception or the rule on its line".
+        if line_flags and len(line_flags) * 2 < len(line_words):
+            for g in line_flags:
                 flagged.append(g)
-            word_max_z = max(abs(g.z_baseline), abs(g.z_height), abs(g.z_stroke))
-            max_z = max(max_z, word_max_z if g.flagged else 0.0)
+                word_max_z = max(abs(g.z_baseline), abs(g.z_height), abs(g.z_stroke))
+                max_z = max(max_z, word_max_z)
+        else:
+            for g in line_flags:  # styled row, not a tamper — keep the geometry, drop the flag
+                g.flagged = False
+                g.reasons.clear()
 
     if lines_assessed == 0:
         return LayoutResult(

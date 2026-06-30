@@ -1,42 +1,55 @@
 import type { Config } from "tailwindcss";
 
 /**
- * Satyum design tokens — a "fintech security console" (CLAUDE.md §9):
- * deep blue / slate base, ONE accent (cyan), and three unmistakable verdict colours.
- * Colours chosen for WCAG AA contrast against the slate-950 canvas.
+ * Satyum design tokens — "Banking Trust Console" (DESIGN.md)
+ * Neutral near-black base, emerald accent, and three unmistakable verdict colours.
  */
 const config: Config = {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        // Base canvas + surfaces (deep slate/navy). `surface` lifts slightly off `canvas` and
-        // `elevated` sits above it so the verdict hero can out-rank the metadata rail (a real
-        // depth hierarchy instead of nine identical panels).
-        canvas: "#080d18",
-        surface: "#111a2c",
-        "surface-2": "#1a2538",
-        elevated: "#16213a",
-        hairline: "#2a374f",
-        "hairline-strong": "#3a4a68",
-        // One accent
-        accent: { DEFAULT: "#22d3ee", muted: "#0e7490", soft: "#0c2a33" },
-        // Verdict semantics — unmistakable, never reused for chrome. `-soft` is a readable tint for
-        // the hero (brighter than before so the verdict reads across a room / on a projector).
+        canvas: "#0a0a0a",
+        surface: "#141414",
+        "surface-hover": "#1f1f1f",
+        "surface-muted": "#0f0f0f",
+        elevated: "#1a1a1a",
+        accent: {
+          DEFAULT: "#10b981", // Emerald
+          hover: "#059669",
+          muted: "#064e3b",
+          fg: "#022c22",
+        },
+        text: {
+          primary: "#f5f5f5",
+          secondary: "#a3a3a3",
+          tertiary: "#737373",
+        },
+        hairline: "#262626",
+        "hairline-strong": "#404040",
+        
+        // Verdict semantics — locked for backend contract
         verdict: {
-          approved: "#22c55e",
-          "approved-soft": "#10301f",
+          approved: "#10b981",
+          "approved-soft": "#064e3b",
           review: "#f59e0b",
-          "review-soft": "#352706",
-          rejected: "#f43f5e",
-          "rejected-soft": "#3a1018",
-          pending: "#7c8aa5",
-          "pending-soft": "#1b2638",
+          "review-soft": "#78350f",
+          rejected: "#ef4444",
+          "rejected-soft": "#7f1d1d",
+          pending: "#737373",
+          "pending-soft": "#262626",
         },
       },
       fontFamily: {
-        sans: ["Inter Variable", "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        sans: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["Geist Mono", "ui-monospace", "SFMono-Regular", "monospace"],
+      },
+      borderRadius: {
+        none: "0px",
+        sm: "4px",
+        md: "8px",     // Controls/Inputs
+        lg: "12px",    // Panels/Cards
+        full: "9999px",
       },
       keyframes: {
         "fade-in": {

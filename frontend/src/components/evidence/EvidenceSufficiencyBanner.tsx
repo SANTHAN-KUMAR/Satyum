@@ -47,7 +47,7 @@ export function EvidenceSufficiencyBanner({ sufficiency }: EvidenceSufficiencyBa
       role="status"
       aria-label={`Evidence sufficiency: ${cfg.label}`}
     >
-      <Layers size={13} className="shrink-0 text-slate-500" aria-hidden="true" />
+      <Layers size={13} className="shrink-0 text-text-tertiary" aria-hidden="true" />
       <span className="eyebrow">Evidence sufficiency</span>
 
       <span
@@ -59,17 +59,17 @@ export function EvidenceSufficiencyBanner({ sufficiency }: EvidenceSufficiencyBa
         {cfg.label}
       </span>
 
-      <span className="text-xs text-slate-400">{cfg.description}</span>
+      <span className="text-xs text-text-secondary">{cfg.description}</span>
 
       <div className="ml-auto flex items-center gap-1.5 text-xs">
-        <span className="text-slate-500">Achievable confidence:</span>
+        <span className="text-text-tertiary">Achievable confidence:</span>
         <span className={cn("font-semibold", CONFIDENCE_CLS[sufficiency.achievable_confidence])}>
           {sufficiency.achievable_confidence}
         </span>
       </div>
 
       {sufficiency.source_types.length > 0 && (
-        <span className="text-[11px] text-slate-600">
+        <span className="text-[11px] text-text-tertiary">
           {sufficiency.doc_count} doc{sufficiency.doc_count !== 1 ? "s" : ""}
           {" · "}
           {sufficiency.source_types.join(", ")}

@@ -71,7 +71,7 @@ export function TrustGauge({ score, verdict }: TrustGaugeProps) {
         <path
           d={arcPath(0, 100)}
           fill="none"
-          stroke="#1a2335"
+          stroke="#262626"
           strokeWidth={STROKE}
           strokeLinecap="round"
         />
@@ -125,10 +125,10 @@ export function TrustGauge({ score, verdict }: TrustGaugeProps) {
         </text>
       </svg>
 
-      {/* Band legend — labelled, with the threshold ranges spelled out. */}
+      {/* Band legend */}
       <ul className="mt-1 flex w-full max-w-[280px] justify-between text-[11px]">
         {SCORE_BANDS.map((b) => (
-          <li key={b.label} className="flex items-center gap-1.5 text-slate-400">
+          <li key={b.label} className="flex items-center gap-1.5 text-text-secondary">
             <span
               className="h-2 w-2 rounded-sm"
               style={{ backgroundColor: b.color }}
@@ -136,7 +136,7 @@ export function TrustGauge({ score, verdict }: TrustGaugeProps) {
             />
             <span>
               {b.label}
-              <span className="ml-1 text-slate-500">
+              <span className="ml-1 text-text-tertiary">
                 {b.from}
                 {b.to === 100 ? "+" : `–${b.to}`}
               </span>

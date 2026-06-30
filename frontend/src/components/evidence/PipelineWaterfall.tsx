@@ -49,7 +49,7 @@ const STATUS_CFG: Record<PipelineStepStatus, StatusCfg> = {
   },
   SKIP: {
     Icon: Minus,
-    iconCls: "text-slate-600",
+    iconCls: "text-text-tertiary",
     nodeCls: "border-hairline/40 bg-canvas/20",
     label: "Skip",
   },
@@ -109,13 +109,13 @@ export function PipelineWaterfall({ layers }: PipelineWaterfallProps) {
                   )}
 
                   {/* Layer number */}
-                  <span className="text-[9px] font-bold text-slate-600">L{l.layer}</span>
+                  <span className="text-[9px] font-bold text-text-tertiary">L{l.layer}</span>
 
                   {/* Status icon */}
                   <cfg.Icon size={15} className={cfg.iconCls} aria-hidden="true" />
 
                   {/* Layer name */}
-                  <span className="text-center text-[10px] font-semibold leading-tight text-slate-300 whitespace-nowrap">
+                  <span className="text-center text-[10px] font-semibold leading-tight text-text-secondary whitespace-nowrap">
                     {LAYER_NAMES[l.layer] ?? l.name}
                   </span>
 
@@ -139,9 +139,9 @@ export function PipelineWaterfall({ layers }: PipelineWaterfallProps) {
 
       {/* Tier legend */}
       <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-hairline/40 pt-2.5">
-        <span className="text-[10px] text-slate-600">Tiers:</span>
+        <span className="text-[10px] text-text-tertiary">Tiers:</span>
         {([1, 2, 3] as const).map((t) => (
-          <span key={t} className="flex items-center gap-1 text-[10px] text-slate-500">
+          <span key={t} className="flex items-center gap-1 text-[10px] text-text-tertiary">
             <span className="rounded-full border border-accent/30 bg-canvas px-1 text-[9px] font-bold text-accent">
               {TIER_LABEL[t]}
             </span>

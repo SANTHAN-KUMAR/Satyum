@@ -63,6 +63,47 @@ def numbers_in(text: str) -> list[Decimal]:
     return list(seen)
 
 
+# When a digital PDF gives us an exact text layer, we re-read the claimed figure from the PDF's own
+# words rather than OCR-ing a raster crop. The VLM's box is often loose (and some readers emit none),
+# so we collect the printed numbers whose word box lies within the claim's box expanded by this
+# geometric pad (a fraction of the page) — wide enough to absorb VLM box imprecision, narrower than the
+# gap between statement rows so it localizes to the intended cell. A geometric tolerance, NOT a
+# detection threshold: it never changes which value is "correct", only where we look for it.
+_TEXTLAYER_REGION_PAD_FRAC = 0.02
+
+
+def numbers_in_region(
+    text_words: tuple[tuple[tuple[float, float, float, float], str], ...],
+    norm_bbox: tuple[float, float, float, float] | None,
+    *,
+    pad: float = _TEXTLAYER_REGION_PAD_FRAC,
+) -> list[Decimal]:
+    """Distinct printed numbers from the PDF text layer at a claim's location (the exact cross-read).
+
+    With a ``norm_bbox`` we return the numbers of words whose centre falls inside the box expanded by
+    ``pad`` — a precise, OCR-free re-read tolerant of a loose VLM box. With no box (a reader that emits
+    no grounding) we fall back to the numbers printed anywhere on the page: a weaker, page-level
+    presence check — it still defeats laundering (a value the model invented to reconcile is not printed
+    anywhere) but cannot localize to the cell, so it is only used when no box is available.
+    """
+    if norm_bbox is None:
+        seen: set[Decimal] = set()
+        for _box, text in text_words:
+            for v in numbers_in(text):
+                seen.add(v)
+        return list(seen)
+
+    x, y, w, h = norm_bbox
+    x0, y0, x1, y1 = x - pad, y - pad, x + w + pad, y + h + pad
+    seen2: set[Decimal] = set()
+    for (wx, wy, ww, wh), text in text_words:
+        cx, cy = wx + ww / 2.0, wy + wh / 2.0
+        if x0 <= cx <= x1 and y0 <= cy <= y1:
+            for v in numbers_in(text):
+                seen2.add(v)
+    return list(seen2)
+
+
 @runtime_checkable
 class NumericReader(Protocol):
     """One independent deterministic decoding of a cell crop into the numbers it contains."""
@@ -152,18 +193,82 @@ class CrossReadEnsemble:
         norm_bbox: tuple[float, float, float, float] | None,
         claimed: Decimal,
         tolerance: float,
+        *,
+        text_words: tuple[tuple[tuple[float, float, float, float], str], ...] = (),
     ) -> CrossReadOutcome:
-        """Decide whether the independent readers confirm ``claimed`` at ``norm_bbox``.
+        """Decide whether an independent decode confirms ``claimed`` at ``norm_bbox``.
 
-        Consensus rule (fail-closed):
-          * **AGREE** — at least one reader read the claimed value (within ``tolerance``) AND every
-            reader that read *any* number at the cell saw the claimed value. No independent reader
-            contradicts it.
-          * **DISAGREE** — some reader read a number at the cell but none of its reads matched the
-            claim: an independent reader literally sees a different figure (the laundering catch).
-          * **UNREAD** — no reader could read a number there: we cannot confirm, so we do not.
+        Medium-aware (ADR-004 §5.2): on a **digital-native PDF** the embedded text layer (``text_words``)
+        is the authoritative independent decode of the printed content — the exact bytes the renderer
+        drew, read through a completely different channel than the VLM's vision pass, with no OCR loss
+        and no dependence on the VLM box being pixel-precise. We use it directly. Only when there is no
+        text layer (a scan / camera image) do we fall back to the OCR ensemble over a raster crop.
+
+        Consensus rule (fail-closed), identical in spirit for both media:
+          * **AGREE** — the independent decode read the claimed value (within ``tolerance``) and nothing
+            at the cell contradicts it. (A laundered figure the model 'corrected' is not what is printed
+            → the independent decode shows the real figure → DISAGREE.)
+          * **DISAGREE** — a number was read at the cell but none matched the claim.
+          * **UNREAD** — no number could be read there: we cannot confirm, so we do not.
         Only AGREE sets ``agree=True``; DISAGREE and UNREAD both withhold trust (→ NOT_EVALUATED).
         """
+        if text_words:
+            return self._verify_textlayer(text_words, norm_bbox, claimed, tolerance)
+        return self._verify_raster(page_img, norm_bbox, claimed, tolerance)
+
+    def _verify_textlayer(
+        self,
+        text_words: tuple[tuple[tuple[float, float, float, float], str], ...],
+        norm_bbox: tuple[float, float, float, float] | None,
+        claimed: Decimal,
+        tolerance: float,
+    ) -> CrossReadOutcome:
+        """Re-read the figure from the digital PDF's exact text layer (no OCR, box-imprecision tolerant).
+
+        Two-stage, fail-closed and laundering-safe:
+          1. **Localized** — if the claim carries a box, read the numbers printed *at that cell*. A match
+             confirms (AGREE); a *different* number printed there is a laundering/misread signal and wins
+             (DISAGREE, held pending) — the box was usable, so we trust what is actually printed there.
+          2. **Page-level fallback** — only when the box was unusable (no number found at the cell, or no
+             box at all, e.g. a reader that emits no grounding). Confirm the value is printed *somewhere*
+             on the page: weaker localization, but it still defeats a value the model invented to make the
+             arithmetic reconcile (an invented figure is printed nowhere). A value printed nowhere → held.
+        """
+        tol = Decimal(str(tolerance))
+        if norm_bbox is not None:
+            region = numbers_in_region(text_words, norm_bbox)
+            if region:
+                reads = {"pdf-text": [str(n) for n in region]}
+                if any(abs(n - claimed) <= tol for n in region):
+                    return CrossReadOutcome(True, f"PDF text layer confirms {claimed} at this cell", reads)
+                return CrossReadOutcome(
+                    False,
+                    f"PDF text layer shows a different figure than {claimed} at this cell "
+                    "(possible laundering / misread — held pending)",
+                    reads,
+                )
+            # box unusable (nothing read there) → fall through to page-level presence
+
+        page_nums = numbers_in_region(text_words, None)
+        reads = {"pdf-text-page": [str(n) for n in page_nums[:50]]}
+        if not page_nums:
+            return CrossReadOutcome(False, "no numbers in the PDF text layer to cross-read", reads)
+        if any(abs(n - claimed) <= tol for n in page_nums):
+            return CrossReadOutcome(True, f"PDF text layer confirms {claimed} is printed on the page", reads)
+        return CrossReadOutcome(
+            False,
+            f"{claimed} is not printed anywhere in the PDF text layer (invented / laundered — held pending)",
+            reads,
+        )
+
+    def _verify_raster(
+        self,
+        page_img: Any,
+        norm_bbox: tuple[float, float, float, float] | None,
+        claimed: Decimal,
+        tolerance: float,
+    ) -> CrossReadOutcome:
+        """The OCR-ensemble cross-read over a raster crop — used for scans / camera images (no text layer)."""
         if norm_bbox is None:
             return CrossReadOutcome(False, "claim has no bounding box to re-read (ungrounded)")
         crop = _crop_for(page_img, norm_bbox)

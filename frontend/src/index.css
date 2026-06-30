@@ -14,29 +14,21 @@
   }
 
   body {
-    @apply bg-canvas text-slate-200 antialiased;
-    /* Inter Variable tabular/contextual features for a crisp data-console read. */
-    font-feature-settings: "cv11", "ss01", "tnum";
-    /* A subtle top-centre glow gives the dark console depth without a busy background. */
-    background-image: radial-gradient(
-      62rem 36rem at 50% -8rem,
-      rgba(34, 211, 238, 0.07),
-      transparent 70%
-    );
-    background-attachment: fixed;
+    @apply bg-canvas text-text-primary antialiased;
+    /* Geist contextual features */
+    font-feature-settings: "cv01", "cv02", "cv03";
   }
 
-  /* Tabular figures wherever numbers must align (gauges, tables, money). */
+  /* Tabular figures wherever numbers must align */
   .tnum {
     font-variant-numeric: tabular-nums;
   }
 
-  /* Accessible focus ring everywhere — visible keyboard focus (CLAUDE.md §9). */
+  /* Accessible focus ring */
   :where(a, button, input, [tabindex], [role="button"]):focus-visible {
     @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-canvas;
   }
 
-  /* Respect reduced-motion: disable the gauge / fade animations for users who ask. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -49,27 +41,25 @@
 }
 
 @layer components {
-  /* The standard console surface. Flat by default so the verdict hero (which opts into shadow +
-     a verdict tint) clearly out-ranks ordinary panels — killing the "nine identical cards" look. */
+  /* Structural structural panel with explicit radius from DESIGN.md */
   .panel {
-    @apply rounded-xl border border-hairline bg-surface/70;
+    @apply rounded-lg border border-hairline bg-surface;
   }
 
-  /* A quieter surface for secondary / metadata panels so they recede below the evidence. */
+  /* Secondary / metadata panels */
   .panel-muted {
-    @apply rounded-xl border border-hairline/70 bg-surface/40;
+    @apply rounded-lg border border-hairline bg-surface-muted;
   }
 
   .panel-title {
-    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400;
+    @apply text-[13px] font-medium text-text-secondary;
   }
 
-  /* Section eyebrow used above grouped content. */
+  /* Deprecated: Left for backward compatibility while migrating components, but removed styling spam */
   .eyebrow {
-    @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500;
+    @apply text-sm font-medium text-text-tertiary;
   }
 
-  /* Visually-hidden but screen-reader-available helper. */
   .sr-only-focusable:not(:focus):not(:focus-within) {
     position: absolute;
     width: 1px;

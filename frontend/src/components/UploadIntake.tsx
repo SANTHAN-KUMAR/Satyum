@@ -4,6 +4,7 @@ import { ApiError } from "@/api/client";
 import { useVerifyDocument } from "@/hooks/useVerifyDocument";
 import { ACCEPT_ATTR, formatBytes, isPdf, isPreviewableImage, rejectReason } from "@/lib/file";
 import { cn } from "@/lib/cn";
+import { COPY } from "@/lib/copy";
 import { EvidenceConsole } from "./evidence/EvidenceConsole";
 import { StateMessage } from "./primitives/StateMessage";
 
@@ -131,23 +132,23 @@ export function UploadIntake() {
         <span
           className={cn(
             "flex h-12 w-12 items-center justify-center rounded-full border transition-colors",
-            isDragging ? "border-accent text-accent" : "border-hairline text-slate-400 group-hover:text-accent",
+            isDragging ? "border-accent text-accent" : "border-hairline text-text-secondary group-hover:text-accent group-hover:border-accent/30",
           )}
           aria-hidden="true"
         >
           <UploadCloud size={22} strokeWidth={1.75} />
         </span>
         <div>
-          <p className="text-sm font-semibold text-slate-100">
-            {isDragging ? "Drop to verify" : "Drag a document here, or click to browse"}
+          <p className="text-[15px] font-medium text-text-primary">
+            {isDragging ? "Drop to verify" : COPY.UPLOAD_DROP_TITLE}
           </p>
-          <p className="mt-1 text-xs text-slate-500">
-            PDF or image · up to {formatBytes(25 * 1024 * 1024)} · treated as hostile and verified server-side
+          <p className="mt-1 text-sm text-text-tertiary">
+            {COPY.UPLOAD_DROP_SUBTITLE} · up to {formatBytes(25 * 1024 * 1024)}
           </p>
         </div>
         {selected && (
-          <p className="text-xs text-slate-400">
-            Selected: <span className="font-medium text-slate-200">{selected.file.name}</span>{" "}
+          <p className="text-xs text-text-secondary">
+            Selected: <span className="font-medium text-text-primary">{selected.file.name}</span>{" "}
             ({formatBytes(selected.file.size)})
           </p>
         )}
@@ -167,8 +168,8 @@ export function UploadIntake() {
       {verify.isPending && (
         <StateMessage
           tone="loading"
-          title="Running the verification waterfall…"
-          detail="Provenance → forensics → arithmetic consistency. The document is processed in memory and never persisted."
+          title={COPY.PROCESSING_TITLE}
+          detail={COPY.PROCESSING_SUBTITLE}
         />
       )}
 
@@ -181,7 +182,7 @@ export function UploadIntake() {
             <>
               <p>{verify.error.message}</p>
               {verify.error instanceof ApiError && verify.error.status && (
-                <p className="mt-1 font-mono text-xs text-slate-500">HTTP {verify.error.status}</p>
+                <p className="mt-1 font-mono text-xs text-text-tertiary">HTTP {verify.error.status}</p>
               )}
             </>
           }
@@ -198,7 +199,7 @@ export function UploadIntake() {
               <button
                 type="button"
                 onClick={clearAndReset}
-                className="rounded-md border border-hairline px-3 py-1.5 text-sm text-slate-300 hover:bg-surface-2"
+                className="rounded-md border border-hairline bg-surface px-3 py-1.5 text-sm text-text-primary hover:bg-surface-hover"
               >
                 Choose another file
               </button>

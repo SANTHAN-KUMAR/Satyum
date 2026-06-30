@@ -87,68 +87,98 @@ class ClaimGraphBuilder:
         self._tol = arithmetic_abs_tolerance
 
     def build(self, raw: RawExtraction, page: PageImage, *, doc_id: str, source: str) -> ClaimGraph:
+        """Single-page build (the camera path and any one-page document)."""
         graph = ClaimGraph(doc_id=doc_id, doc_type=raw.doc_type, primary_language=raw.primary_language)
+        self._add_page(graph, raw, page, doc_id=doc_id, source=source, seq_offset=0, seen_fields=set())
+        return graph
+
+    def build_multi(
+        self, pages: list[tuple[RawExtraction, PageImage]], *, doc_id: str, source: str
+    ) -> ClaimGraph:
+        """Merge a multi-page document into ONE claim graph (ADR-004 §3 — a statement spans pages).
+
+        A real bank statement carries opening/closing on the summary page and the transaction rows over
+        several continuation pages; the running-balance chain and the net reconciliation are only correct
+        over the COMPLETE set. We extract each page (each cell cross-read against its own page's exact
+        text layer), renumber transactions continuously so the chain is unbroken across the page break,
+        and keep the first occurrence of each scalar field (opening/closing appear once, on page 1).
+        """
+        doc_type = next((r.doc_type for r, _ in pages if r.doc_type and r.doc_type != "OTHER"), "OTHER")
+        primary_language = pages[0][0].primary_language if pages else "en"
+        graph = ClaimGraph(doc_id=doc_id, doc_type=doc_type, primary_language=primary_language)
+        seq_offset = 0
+        seen_fields: set[tuple[str, str]] = set()
+        for raw, page in pages:
+            seq_offset = self._add_page(
+                graph, raw, page, doc_id=doc_id, source=source,
+                seq_offset=seq_offset, seen_fields=seen_fields,
+            )
+        return graph
+
+    def _add_page(
+        self,
+        graph: ClaimGraph,
+        raw: RawExtraction,
+        page: PageImage,
+        *,
+        doc_id: str,
+        source: str,
+        seq_offset: int,
+        seen_fields: set[tuple[str, str]],
+    ) -> int:
+        """Add one page's claims to ``graph``; return the next transaction-seq offset.
+
+        ``seq_offset`` renumbers this page's transactions so they continue the previous page's sequence
+        (so the running-balance chain is unbroken across pages). ``seen_fields`` deduplicates scalar
+        fields/summary rows that the model might repeat in a page header (keep the first occurrence).
+        """
         page_img = self._decode(page)
 
         for f in raw.fields:
             value_type = FIELD_VALUE_TYPE.get(f.predicate)
             if value_type is None:  # unknown predicate slipped through — never trust it (§5.4)
                 continue
+            subject = _resolve_subject(raw.doc_type or graph.doc_type or "OTHER", f.predicate)
+            if (subject, f.predicate) in seen_fields:
+                continue  # a repeated header field on a later page — keep the first
+            seen_fields.add((subject, f.predicate))
             claim = self._make_claim(
-                subject=_resolve_subject(raw.doc_type, f.predicate),
-                predicate=f.predicate,
-                value=f.value,
-                value_type=value_type,
-                norm_bbox=f.bbox,
-                confidence=f.confidence,
-                page=page,
-                page_img=page_img,
-                source=source,
-                doc_id=doc_id,
-                index=None,
+                subject=subject, predicate=f.predicate, value=f.value, value_type=value_type,
+                norm_bbox=f.bbox, confidence=f.confidence, page=page, page_img=page_img,
+                source=source, doc_id=doc_id, index=None,
             )
             if claim is not None:
                 graph.add(claim)
 
+        max_seq = -1
         for txn in raw.transactions:
+            seq = txn.seq + seq_offset
+            max_seq = max(max_seq, txn.seq)
             for cell_name, value_type in TXN_CELL_VALUE_TYPE.items():
                 cell: ExtractedValue | None = getattr(txn, cell_name)
                 if cell is None:
                     continue
                 claim = self._make_claim(
-                    subject=f"transaction_{txn.seq}",
-                    predicate=cell_name,
-                    value=cell.value,
-                    value_type=value_type,
-                    norm_bbox=cell.bbox,
-                    confidence=cell.confidence,
-                    page=page,
-                    page_img=page_img,
-                    source=source,
-                    doc_id=doc_id,
-                    index=txn.seq,
+                    subject=f"transaction_{seq}", predicate=cell_name, value=cell.value,
+                    value_type=value_type, norm_bbox=cell.bbox, confidence=cell.confidence,
+                    page=page, page_img=page_img, source=source, doc_id=doc_id, index=seq,
                 )
                 if claim is not None:
                     graph.add(claim)
 
         for row in raw.summary_rows:
+            if ("summary", row.kind) in seen_fields:
+                continue
+            seen_fields.add(("summary", row.kind))
             claim = self._make_claim(
-                subject="summary",
-                predicate=row.kind,
-                value=row.amount.value,
-                value_type="Money",
-                norm_bbox=row.amount.bbox,
-                confidence=row.amount.confidence,
-                page=page,
-                page_img=page_img,
-                source=source,
-                doc_id=doc_id,
-                index=None,
+                subject="summary", predicate=row.kind, value=row.amount.value, value_type="Money",
+                norm_bbox=row.amount.bbox, confidence=row.amount.confidence, page=page,
+                page_img=page_img, source=source, doc_id=doc_id, index=None,
             )
             if claim is not None:
                 graph.add(claim)
 
-        return graph
+        return seq_offset + max_seq + 1 if max_seq >= 0 else seq_offset
 
     # --- internals --------------------------------------------------------------------------------
 
@@ -178,6 +208,10 @@ class ClaimGraphBuilder:
         doc_id: str,
         index: int | None,
     ) -> Claim | None:
+        # An absent printed value is not a claim — a reader may emit an empty cell for a row that has
+        # only a debit or only a credit. Skip it rather than carry a blank, untrusted claim (noise).
+        if not value.strip():
+            return None
         cross_read_required = is_cross_read_critical(value_type)
         pixel_bbox = _pixel_bbox(norm_bbox, page.width, page.height)
         prov = ClaimProvenance(
@@ -186,24 +220,26 @@ class ClaimGraphBuilder:
 
         if cross_read_required:
             canonical_dec, canonical_str = _canonical_number(value)
+            value = canonical_str
+            have_textlayer = bool(page.text_words)
             if canonical_dec is None:
                 # The VLM reported a non-numeric value for a numeric field — never trust it.
                 prov.cross_read_agree = False
                 prov.cross_read_detail = "VLM value is not a parseable number"
-                value = canonical_str
-            elif page_img is None:
+            elif page_img is None and not have_textlayer:
+                # No independent decode available at all (PIL decode failed AND no PDF text layer).
                 prov.cross_read_agree = False
-                prov.cross_read_detail = "page image unavailable — number could not be re-read"
-                value = canonical_str
+                prov.cross_read_detail = "no independent decode available — number could not be re-read"
             else:
                 tol = numeric_tolerance(value_type, arithmetic_abs_tolerance=self._tol)
-                outcome = self._ensemble.verify(page_img, norm_bbox, canonical_dec, tol)
+                outcome = self._ensemble.verify(
+                    page_img, norm_bbox, canonical_dec, tol, text_words=page.text_words
+                )
                 prov.cross_read_agree = outcome.agree
                 prov.cross_read_detail = outcome.detail
                 prov.corroborating_read = (
                     "; ".join(f"{name}={vals}" for name, vals in outcome.reads.items()) or None
                 )
-                value = canonical_str
         else:
             # Free-text / validated string: scrub an embedded instruction; never trust the VLM's type.
             if _is_instruction_like(value):

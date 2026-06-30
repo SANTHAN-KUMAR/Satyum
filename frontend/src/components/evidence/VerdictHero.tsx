@@ -27,13 +27,11 @@ export function VerdictHero({ trust }: VerdictHeroProps) {
         trust.fail_closed ? " Fail-closed: degraded to the safe side." : ""
       }`}
       className={cn(
-        "relative overflow-hidden rounded-2xl border shadow-xl shadow-black/40",
+        "relative overflow-hidden rounded-lg border shadow-xl shadow-black/40",
         t.border,
       )}
-      // Verdict-tinted gradient over the surface — dynamic colour, so set inline (CLAUDE.md §9: the
-      // colour still always rides alongside the icon + word, never colour alone).
       style={{
-        background: `linear-gradient(135deg, ${t.stroke}26, ${t.stroke}08 38%, transparent 72%), #111a2c`,
+        background: `linear-gradient(135deg, ${t.stroke}15, ${t.stroke}05 40%, transparent 70%), #141414`,
       }}
     >
       {/* Strong verdict accent bar so rejection reads instantly at the edge of vision. */}
@@ -43,21 +41,21 @@ export function VerdictHero({ trust }: VerdictHeroProps) {
         {/* Left: the verdict + action. */}
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <p className="eyebrow">Document integrity verdict</p>
+            <p className="panel-title mb-0">Document verification verdict</p>
             {trust.fail_closed && (
               <span
                 className="inline-flex items-center gap-1 rounded-md border border-verdict-review/40 bg-verdict-review-soft px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-verdict-review"
-                title="The pipeline degraded toward the safer outcome (an analyzer errored or the aggregate was indeterminate)."
+                title="The system defaulted to manual review due to missing extraction data."
               >
-                <ShieldAlert size={11} aria-hidden="true" /> fail-closed
+                <ShieldAlert size={11} aria-hidden="true" /> Manual Review
               </span>
             )}
           </div>
 
-          <div className="mt-2.5 flex items-center gap-4">
+          <div className="mt-3 flex items-center gap-4">
             <span
               className={cn(
-                "flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border",
+                "flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border",
                 t.bg,
                 t.border,
               )}
@@ -69,16 +67,16 @@ export function VerdictHero({ trust }: VerdictHeroProps) {
               <p className={cn("text-4xl font-extrabold leading-none tracking-tight sm:text-5xl", t.text)}>
                 {t.label}
               </p>
-              <p className="mt-2 text-sm font-medium text-slate-400">{tierLabel}</p>
+              <p className="mt-1 text-sm font-medium text-text-secondary">{tierLabel}</p>
             </div>
           </div>
 
-          {/* Recommended action — the "what to do", verbatim from the backend. */}
-          <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-hairline bg-canvas/40 px-4 py-3">
+          {/* Recommended action */}
+          <div className="mt-5 flex items-start gap-2.5 rounded-lg border border-hairline bg-surface-muted px-4 py-3">
             <ArrowRight size={16} className={cn("mt-0.5 shrink-0", t.text)} aria-hidden="true" />
             <div className="min-w-0">
-              <p className="eyebrow mb-0.5">Recommended action</p>
-              <p className="text-sm leading-relaxed text-slate-200">{pack.recommended_action}</p>
+              <p className="panel-title mb-0.5">Recommended action</p>
+              <p className="text-sm leading-relaxed text-text-primary">{pack.recommended_action}</p>
             </div>
           </div>
         </div>

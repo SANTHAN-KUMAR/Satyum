@@ -20,10 +20,10 @@ interface StateMessageProps {
  */
 export function StateMessage({ tone = "neutral", title, detail, action, icon, className }: StateMessageProps) {
   const tones: Record<Tone, string> = {
-    neutral: "border-hairline text-slate-300",
+    neutral: "border-hairline text-text-secondary",
     error: "border-verdict-rejected/40 text-verdict-rejected",
     info: "border-accent/30 text-accent",
-    loading: "border-hairline text-slate-300",
+    loading: "border-hairline text-text-secondary",
   };
   return (
     <div
@@ -37,15 +37,15 @@ export function StateMessage({ tone = "neutral", title, detail, action, icon, cl
     >
       {tone === "loading" ? (
         <span
-          className="h-6 w-6 animate-spin rounded-full border-2 border-slate-600 border-t-accent"
+          className="h-6 w-6 animate-spin rounded-full border-2 border-hairline-strong border-t-accent"
           aria-hidden="true"
         />
       ) : (
         icon && <div aria-hidden="true">{icon}</div>
       )}
       <div className="space-y-1">
-        <p className="text-sm font-semibold text-slate-100">{title}</p>
-        {detail && <div className="mx-auto max-w-md text-sm text-slate-400">{detail}</div>}
+        <p className="text-sm font-semibold text-text-primary">{title}</p>
+        {detail && <div className="mx-auto max-w-md text-sm text-text-secondary">{detail}</div>}
       </div>
       {action}
     </div>
