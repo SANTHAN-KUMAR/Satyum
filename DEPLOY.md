@@ -81,6 +81,41 @@ implementation; the contract is "one provider key for cloud, one endpoint URL fo
 deterministic decision path runs regardless — the VLM only feeds the claim graph (§2), and a missing or
 unreachable extractor fails closed to `NOT_EVALUATED`, never a guessed pass.
 
+**Provider-agnostic reader (env contract).** The reader is selected by config — set the credential and,
+for OpenAI-compatible hosts, a base URL:
+
+| Env var | Purpose |
+|---|---|
+| `SATYUM_VLM_PROVIDER` | `anthropic` (default) · `gemini` · `groq` · `cloudflare` · or any OpenAI-compatible host. |
+| `SATYUM_VLM_MODEL` | Provider-native model id (e.g. `claude-sonnet-4-6`). |
+| `SATYUM_VLM_API_KEY` | The reader's credential. |
+| `SATYUM_VLM_BASE_URL` | OpenAI-compatible base URL — **OpenRouter / Together / DeepInfra / Fireworks / Ollama** (e.g. `https://openrouter.ai/api/v1`). |
+| `SATYUM_VLM_CLOUDFLARE_ACCOUNT_ID` | Cloudflare Workers AI account id (derives its base URL). |
+
+One OpenAI-compatible extractor covers Cloudflare, OpenRouter, Together, DeepInfra, Fireworks, and local
+Ollama, all behind the same box-grounded, cross-read trust boundary. *Honest throughput note:*
+Cloudflare/Mistral-Small-3.1-24B works for short docs; dense multi-page statements want a
+higher-throughput reader (Gemini / Claude / self-hosted Qwen2.5-VL).
+
+### 1b. Interpretation LLM (the narrator / copilot) — optional, decoupled
+
+The interpretability layer (plain-English narrator + underwriter copilot, see
+[ADR-006](architecture/ADR-006-interpretability-and-resilience.md)) is a **separate, text-only** model,
+configured independently so a SOTA text reasoner can narrate while the vision model reads:
+
+| Env var | Purpose |
+|---|---|
+| `SATYUM_INTERPRET_PROVIDER` | e.g. `deepseek` · `groq` · `gemini`. **Unset → reuse the `vlm_*` reader.** |
+| `SATYUM_INTERPRET_MODEL` | e.g. `deepseek-v4-pro`. |
+| `SATYUM_INTERPRET_API_KEY` | The interpreter's credential. |
+| `SATYUM_INTERPRET_BASE_URL` | Override; otherwise derived from the provider name. |
+
+When unset, the layer transparently reuses the reader credential, so a single-key deployment still
+narrates. **DeepSeek v4** is the wired text narrator — note its hosted API is **text-only** (it rejects
+images), so it narrates/answers but is **not** a document reader. The narrator can **never** change a
+verdict: a contradicting narrative is discarded and on any LLM failure it falls back to a deterministic
+narrative (the firewall, ADR-006 §2).
+
 ### 2. Real cryptographic trust anchor (CCA-India root)
 
 The images bundle a **demo** CA root so the sample signed PDF verifies out of the box — it will **not**
@@ -115,6 +150,15 @@ stays verifiable (proven above). `/api/health` reports the live backend (`"audit
 if the DB is ever unreachable it **fails safe** to in-memory and says so — it never pretends durability
 it doesn't have. Camera **frames** are still never persisted (privacy by design, §10). *Session* state
 remains in-memory by design (Redis is the documented next step; it holds no document content).
+
+### 4. Password-protected PDFs — handled in memory (no extra config)
+
+Government/bank PDFs (Aadhaar, CAMS/Karvy CAS, signed e-statements) ship encrypted. The backend
+**detects** this at intake and returns a recoverable `needs_password` response (not a fraud signal, not
+an error); the password is taken in-app, decrypted **in memory** at each consumer, and **never saved**,
+which **preserves the digital signature** that a 3rd-party password-remover would destroy (ADR-006 §3).
+No deployment config is required; the password is held only for the request and never logged (§10). Both
+the backend and the inline frontend prompt (collect the password and resubmit) are implemented and tested.
 
 ---
 

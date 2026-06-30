@@ -90,6 +90,14 @@ class Settings(BaseSettings):
 
     # --- Detector tunables (all DEFAULT — needs calibration unless noted) ------------------
     arithmetic_abs_tolerance: float = 1.0  # rupees; rounding tolerance for invariant checks
+    # A running-balance break whose PRINTED figure is this far below the statement's monetary scale is a
+    # likely OCR/text-layer MISPARSE (a truncated/garbage cell like "1" amid ₹2-lakh balances), not a
+    # tamper: a real single-field edit substitutes a *plausible* figure of similar magnitude. When a
+    # break looks like a misparse the deterministic arithmetic returns NOT_EVALUATED (pending → REVIEW),
+    # never a confident "tampered" — extraction wasn't reliable enough to judge (CLAUDE.md §3.1/§4). The
+    # VLM claim-graph path (cross-read-verified) remains the authoritative arithmetic when available.
+    # DEFAULT — conservative (0.5%): only obvious garbage is excused; plausible edits still flag.
+    arithmetic_misparse_ratio: float = 0.005
     ocr_min_confidence: float = 0.45  # below this a field is "unreadable -> pending", not "tampered"
     phash_hamming_threshold: int = 8  # 256-bit hash; <= match. DEFAULT — set from ROC on real corpus
     quality_min_laplacian_var: float = 100.0  # focus gate; below -> REVIEW (fail-closed)
@@ -124,6 +132,35 @@ class Settings(BaseSettings):
     signature_allow_fetching: bool = False
     signature_revocation_mode: str = "soft-fail"
 
+    # --- Layer 3 Collective Intelligence (federation) + source providers (PROPOSAL-001) ----
+    # Advisory: the suspicion at/above which a registry/ring finding raises an otherwise-APPROVED
+    # case to human REVIEW. Advisory NEVER lowers suspicion, NEVER clears a doc, NEVER enters the
+    # deterministic score — it can only raise APPROVED -> REVIEW. DEFAULT — needs calibration.
+    advisory_review_threshold: float = 0.5
+    # Claimed-vs-document PAN cross-check (onboarding): a typed PAN that does not match the document's
+    # PAN is a real identity-mismatch signal. DEFAULT — calibrate alongside the cross-document weights.
+    weight_claimed_identity: float = 0.40
+    # Promoted (analyst-approved, FL-discovered) deterministic rule over engineered features (§6.3.1).
+    weight_promoted_rule: float = 0.30
+    # Consortium federation secrets: salt de-correlates stored pHashes; pepper makes HMAC entity tokens
+    # non-invertible (federation/tokens.py). SECRETS — in prod from a KMS/HSM, NEVER committed (§7.2/§10).
+    # DEV defaults let the registry RUN locally/in tests; all-zero salt = pHash de-correlation OFF.
+    federation_consortium_salt_hex: str = "00" * 32  # DEV DEFAULT — override in prod
+    federation_entity_pepper: str = "satyum-dev-pepper-CHANGE-ME"  # DEV DEFAULT — override via env/KMS
+    federation_bank_id: str = "satyum-local"  # this bank's stable consortium id
+    # Source-of-truth PAN provider (real Income-Tax existence check via a KYC aggregator). No key →
+    # the provider validates structure only and gates live existence to NOT_VERIFIED (honest, never faked).
+    pan_api_base_url: str = "https://api.sandbox.co.in"
+    pan_api_key: str = ""        # SATYUM_PAN_API_KEY   (secret — from the provider console)
+    pan_api_secret: str = ""     # SATYUM_PAN_API_SECRET (secret)
+    pan_api_version: str = "1.0.0"
+    pan_api_timeout_s: float = 20.0
+    pan_api_reason: str = "Loan underwriting KYC verification for a bank customer onboarding"
+    # Pinned UIDAI public signing cert(s) for Aadhaar offline e-KYC XML verification (public certs only).
+    # Empty -> the Aadhaar provider validates the embedded UIDAI cert against the CCA roots in the
+    # configured trust_anchor_dir.
+    uidai_cert_dir: str = "backend/verification/uidai_certs"
+
     # --- Layer 2: VLM document understanding (ADR-004 §2/§5/§7) ----------------------------
     # The model READS arbitrary layouts into a claim graph; the deterministic layers DECIDE. The
     # reader is swappable by config — no key ⇒ the analyzer gates to NOT_EVALUATED (never a fake pass).
@@ -131,8 +168,24 @@ class Settings(BaseSettings):
     vlm_provider: str = "anthropic"
     vlm_model: str = "claude-sonnet-4-6"  # provider-native model id; "" → the provider's default
     vlm_api_key: str = ""  # SATYUM_VLM_API_KEY — the default reader's credential
-    vlm_max_tokens: int = 4096
+    # OpenAI-compatible backends (provider "cloudflare" / "openrouter" / "together" / "ollama" / …) —
+    # one extractor, any host (forensics/extraction/openai_compatible_extractor.py). For "cloudflare"
+    # set the account id below; for the generic ones set the full /v1 base URL.
+    vlm_cloudflare_account_id: str = ""  # SATYUM_VLM_CLOUDFLARE_ACCOUNT_ID (Workers AI account id)
+    vlm_base_url: str = ""               # SATYUM_VLM_BASE_URL e.g. https://openrouter.ai/api/v1
+    vlm_max_tokens: int = 8192  # room for a dense transaction page's structured JSON (bbox+conf per cell)
     vlm_timeout_seconds: float = 60.0
+    # --- Interpretability layer: the narrator + underwriter copilot (the "MCP" insight layer) -------
+    # This LLM only TRANSLATES the immutable evidence pack into plain English / answers questions over
+    # it — it can never change a verdict (interpretability/firewall.py). It is a TEXT model and is
+    # decoupled from the vision reader on purpose: a text-only SOTA reasoner (e.g. DeepSeek v4) can
+    # narrate while a separate vision model reads. Unset ⇒ falls back to the vlm_* reader credential, so
+    # nothing breaks if you don't configure a dedicated interpreter. Configured via SATYUM_INTERPRET_*.
+    interpret_provider: str = ""  # e.g. "deepseek" | "groq" | "gemini"; "" → reuse the vlm_* reader
+    interpret_model: str = ""     # e.g. "deepseek-v4-pro"; "" → reuse vlm_model
+    interpret_api_key: str = ""   # "" → reuse vlm_api_key
+    interpret_base_url: str = ""  # "" → derived from interpret_provider (or reuse vlm_base_url)
+    interpret_max_tokens: int = 1200  # headroom for a 3-paragraph narrative; reasoning models need room
     # A statement's rows span continuation pages; the running-balance chain and net reconciliation are
     # only correct over the COMPLETE set, so Layer 2 reads every page (ADR-004 §3). Bounded so a
     # pathological many-page upload cannot exhaust the VLM budget (one extraction call per page).

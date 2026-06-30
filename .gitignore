@@ -53,3 +53,16 @@ samples/hard/
 804153748-Statement.pdf
 aadhars/
 .agents/
+
+# --- Confidential real-life PII documents — NEVER commit (real Aadhaar/PAN/bank/IT of a real person) ---
+Real_life_docs/
+.Real_life_docs/
+**/Real_life_docs/
+
+# --- Local Ollama VLM model blobs (multi-GB; pulled for self-hosted/offline reading) — never commit ---
+.ollama_models/
+.ollama/
+
+# --- Personal real documents used for local testing — NOT synthetic; keep out of git (PII) ---
+PAN/
+Santhan_bank_statement_forged.pdf

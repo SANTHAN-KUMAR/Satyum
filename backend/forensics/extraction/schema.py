@@ -85,6 +85,11 @@ FIELD_VALUE_TYPE: dict[str, str] = {
     "guidance_value": "Money",
     "stamp_duty_paid": "Money",
     "registration_fee": "Money",
+    # identity documents (PAN card / Aadhaar) — feed cross-document identity corroboration, not a
+    # financial rule pack (an ID card has no transaction table). ``pan``/``holder_name`` are reused
+    # from the income-proof section above.
+    "aadhaar": "Aadhaar",
+    "date_of_birth": "Date",
 }
 
 # Which entity (claim subject) owns each predicate, per document type. A single document is one type,
@@ -146,11 +151,20 @@ DOC_TYPE_ENTITY_FIELDS: dict[str, dict[str, frozenset[str]]] = {
         "registration_event": frozenset({"registration_number", "registration_date"}),
         "property_parcel": frozenset({"survey_number", "extent"}),
     },
+    # Identity cards: no rule pack (no transaction table) — the identity fields feed cross-document
+    # corroboration (the PAN / Aadhaar / name that must agree across the application bundle).
+    "PAN_CARD": {
+        "identity": frozenset({"pan", "holder_name", "date_of_birth"}),
+    },
+    "AADHAAR": {
+        "identity": frozenset({"aadhaar", "holder_name", "date_of_birth"}),
+    },
 }
 
 DOC_TYPES = (
     "BANK_STATEMENT", "SALARY_SLIP", "FORM16", "ITR",
     "LOAN_AGREEMENT", "SALE_AGREEMENT", "LEASE_AGREEMENT", "GENERIC_CONTRACT", "SALE_DEED",
+    "AADHAAR", "PAN_CARD",
     "OTHER",
 )
 

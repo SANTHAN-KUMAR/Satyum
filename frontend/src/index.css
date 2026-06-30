@@ -4,7 +4,12 @@
 
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
+    /* The highlight gradient — deep saffron → navy → deep India-green. Deepened so WHITE text and
+       gradient-CLIPPED text both stay ≥4.5:1 legible (bright saffron on white fails WCAG). */
+    --grad: linear-gradient(120deg, #c2410c 0%, #000080 52%, #0f6e06 100%);
+    /* Vivid tricolour for thin DECORATIVE lines only (no text sits on these). */
+    --grad-vivid: linear-gradient(120deg, #ff9933 0%, #000080 52%, #138808 100%);
   }
 
   html,
@@ -14,19 +19,25 @@
   }
 
   body {
-    @apply bg-canvas text-text-primary antialiased;
-    /* Geist contextual features */
-    font-feature-settings: "cv01", "cv02", "cv03";
+    @apply bg-canvas text-slate-300 antialiased;
+    font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+    font-weight: 400;
+    font-feature-settings: "ss01";
   }
 
-  /* Tabular figures wherever numbers must align */
+  h1, h2, h3 {
+    @apply text-slate-100;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
   .tnum {
     font-variant-numeric: tabular-nums;
   }
 
-  /* Accessible focus ring */
-  :where(a, button, input, [tabindex], [role="button"]):focus-visible {
-    @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-canvas;
+  /* Monochrome focus ring (near-black) on the white canvas. */
+  :where(a, button, input, select, textarea, [tabindex], [role="button"]):focus-visible {
+    @apply outline-none ring-2 ring-ink ring-offset-2 ring-offset-surface;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -41,23 +52,90 @@
 }
 
 @layer components {
-  /* Structural structural panel with explicit radius from DESIGN.md */
+  /* --- the highlight gradient ----------------------------------------------------------------- */
+  .gradient-accent {
+    background-image: var(--grad);
+  }
+  .gradient-text {
+    background-image: var(--grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  /* a thin gradient hairline (replaces the old tricolour rule) — vivid is fine, no text sits on it */
+  .gradient-rule,
+  .flag-rule {
+    background-image: var(--grad-vivid);
+  }
+  /* a 1px gradient border via mask (for emphasised cards) */
+  .gradient-ring {
+    position: relative;
+  }
+  .gradient-ring::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--grad);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* --- glassmorphism (for emphasised terminology / panels) ------------------------------------ */
+  .glass {
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow: theme("boxShadow.glass");
+  }
+  .glass-2 {
+    background: rgba(255, 255, 255, 0.42);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: theme("boxShadow.glass");
+  }
+
+  /* Soft aurora blobs behind glass so the frosting reads on a white page (subtle, premium). */
+  .aurora {
+    position: relative;
+    isolation: isolate;
+    background:
+      radial-gradient(38% 48% at 10% 14%, rgba(255, 153, 51, 0.16), transparent 70%),
+      radial-gradient(36% 46% at 90% 8%, rgba(0, 0, 128, 0.12), transparent 70%),
+      radial-gradient(44% 52% at 78% 96%, rgba(19, 136, 8, 0.12), transparent 70%),
+      #ffffff;
+  }
+
+  /* --- surfaces + controls -------------------------------------------------------------------- */
   .panel {
-    @apply rounded-lg border border-hairline bg-surface;
+    @apply rounded-2xl border border-hairline bg-surface shadow-card;
   }
-
-  /* Secondary / metadata panels */
-  .panel-muted {
-    @apply rounded-lg border border-hairline bg-surface-muted;
-  }
-
   .panel-title {
-    @apply text-[13px] font-medium text-text-secondary;
+    @apply text-xs font-semibold uppercase tracking-[0.16em] text-slate-500;
+  }
+  .hairline {
+    @apply border-hairline;
   }
 
-  /* Deprecated: Left for backward compatibility while migrating components, but removed styling spam */
-  .eyebrow {
-    @apply text-sm font-medium text-text-tertiary;
+  /* Primary = monochrome black (premium); reserve the gradient for genuine highlights. */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-white shadow-card transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  /* The ONE hero CTA per view — the gradient highlight. */
+  .btn-gradient {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-card transition disabled:cursor-not-allowed disabled:opacity-40;
+    background-image: var(--grad);
+  }
+  .btn-gradient:hover {
+    filter: brightness(1.06);
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-hairline bg-surface px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40;
   }
 
   .sr-only-focusable:not(:focus):not(:focus-within) {

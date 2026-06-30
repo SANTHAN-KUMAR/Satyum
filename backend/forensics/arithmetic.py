@@ -87,6 +87,27 @@ def _close(a: Decimal, b: Decimal) -> bool:
     return (a - b).copy_abs() <= _tol()
 
 
+def _statement_scale(stmt: StatementData) -> Decimal:
+    """The statement's typical monetary magnitude — the MEDIAN absolute balance (robust to one garbage
+    cell). Used to tell a misparsed figure (far below scale) from a plausible edited one (at scale)."""
+    mags = sorted(
+        abs(b)
+        for b in [stmt.opening_balance, stmt.closing_balance, *(t.balance for t in stmt.transactions)]
+        if b is not None and b != 0
+    )
+    if not mags:
+        return Decimal(0)
+    mid = len(mags) // 2
+    return mags[mid] if len(mags) % 2 == 1 else (mags[mid - 1] + mags[mid]) / 2
+
+
+def _off_scale(printed: Decimal, scale: Decimal) -> bool:
+    """True when a printed balance is implausibly small versus the statement's scale — the signature of
+    a truncated/garbage parse (e.g. '1' amid ₹2-lakh balances), not a plausible edited figure. A real
+    single-field edit substitutes a figure of *similar* magnitude, so it stays above the threshold."""
+    return scale > 0 and printed.copy_abs() < scale * Decimal(str(settings.arithmetic_misparse_ratio))
+
+
 def check_consistency(stmt: StatementData) -> ConsistencyResult:
     """Recompute every invariant. Pure function — no I/O, fully deterministic."""
     violations: list[Violation] = []
@@ -103,33 +124,48 @@ def check_consistency(stmt: StatementData) -> ConsistencyResult:
             reason="insufficient parsed structure (need opening balance + >=2 balances + movements)",
         )
 
+    # The statement's monetary scale (median balance) — lets us tell a misparsed cell (far below scale)
+    # from a plausible edited figure (at scale). Computed once; robust to a single garbage cell.
+    scale = _statement_scale(stmt)
+    unreadable = 0  # balance cells dropped as off-scale misparses (extraction noise, not tampering)
+
     # --- Invariant 1: running balance chain ----------------------------------------------
     running = stmt.opening_balance
     for t in txns:
         credit = t.credit or Decimal(0)
         debit = t.debit or Decimal(0)
         expected = running + credit - debit
-        if t.balance is not None:
-            checks += 1
-            if not _close(expected, t.balance):
-                violations.append(
-                    Violation("running_balance", t.index, expected, t.balance, t.balance_bbox)
-                )
-            # Re-anchor on the PRINTED balance each row so a tampered figure produces a *local*
-            # break (its own row, and the next row whose check uses it as the prior balance) rather
-            # than cascading a single edit into every downstream row.
-            running = t.balance
-        else:
+        if t.balance is None:
             running = expected
+            continue
+        if not _close(expected, t.balance):
+            # A break whose printed figure is implausibly off-scale is a parse error, not a tamper:
+            # drop it and do NOT cascade — re-anchor on the computed value, not the garbage cell, so a
+            # single misparse can't manufacture a downstream "plausible" break (CLAUDE.md §3.1/§4).
+            if _off_scale(t.balance, scale):
+                unreadable += 1
+                running = expected
+                continue
+            checks += 1
+            violations.append(
+                Violation("running_balance", t.index, expected, t.balance, t.balance_bbox)
+            )
+        else:
+            checks += 1
+        # Re-anchor on the PRINTED balance so a tampered figure breaks locally, not every later row.
+        running = t.balance
 
     # --- Invariant 2: closing balance -----------------------------------------------------
     last_printed = next((t.balance for t in reversed(txns) if t.balance is not None), None)
     if stmt.closing_balance is not None and last_printed is not None:
-        checks += 1
-        if not _close(stmt.closing_balance, last_printed):
-            violations.append(
-                Violation("closing_balance", None, last_printed, stmt.closing_balance)
-            )
+        if _off_scale(stmt.closing_balance, scale) or _off_scale(last_printed, scale):
+            unreadable += 1
+        else:
+            checks += 1
+            if not _close(stmt.closing_balance, last_printed):
+                violations.append(
+                    Violation("closing_balance", None, last_printed, stmt.closing_balance)
+                )
 
     # --- Invariant 3: column totals -------------------------------------------------------
     sum_debit = sum((t.debit for t in txns if t.debit is not None), Decimal(0))
@@ -145,12 +181,28 @@ def check_consistency(stmt: StatementData) -> ConsistencyResult:
 
     # --- Invariant 4: net reconciliation (opening + credits - debits == closing) ----------
     if stmt.closing_balance is not None:
-        checks += 1
-        expected_close = stmt.opening_balance + sum_credit - sum_debit
-        if not _close(expected_close, stmt.closing_balance):
-            violations.append(
-                Violation("net_reconciliation", None, expected_close, stmt.closing_balance)
-            )
+        if _off_scale(stmt.closing_balance, scale):
+            unreadable += 1
+        else:
+            checks += 1
+            expected_close = stmt.opening_balance + sum_credit - sum_debit
+            if not _close(expected_close, stmt.closing_balance):
+                violations.append(
+                    Violation("net_reconciliation", None, expected_close, stmt.closing_balance)
+                )
+
+    # Decision (CLAUDE.md §3.1/§4): plausible breaks → flag as tamper. No breaks but some figures were
+    # unreadable misparses → NOT_EVALUATED (couldn't reliably read it → pending/REVIEW, never a
+    # confident "tampered" off garbage). Otherwise everything reconciled → clean.
+    if not violations and unreadable:
+        return ConsistencyResult(
+            evaluated=False,
+            checks_run=checks,
+            reason=(
+                f"{unreadable} balance figure(s) implausible against the statement's ~{scale} scale — "
+                "likely OCR/text-layer misparse(s); left pending, not asserted as tampered"
+            ),
+        )
 
     return ConsistencyResult(
         evaluated=True,

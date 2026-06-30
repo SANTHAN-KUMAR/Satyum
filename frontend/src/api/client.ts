@@ -43,11 +43,47 @@ export class ApiError extends Error {
   }
 }
 
+/** Backend health (GET /api/health) — used by the UI to show whether the backend is reachable. */
+export interface HealthInfo {
+  status: string;
+  analyzers: number;
+  audit_backend: string;
+  audit_chain_intact: boolean;
+}
+
+export async function getHealth(signal?: AbortSignal): Promise<HealthInfo> {
+  const res = await fetch(apiUrl("/api/health"), { headers: { Accept: "application/json" }, signal });
+  if (!res.ok) throw new ApiError(`backend health HTTP ${res.status}`);
+  return (await res.json()) as HealthInfo;
+}
+
 interface VerifyOptions {
   /** Optional underwriter-declared document type, forwarded as a form field if present. */
   docType?: string;
+  /** Optional engineered application features, sent as `features_json` for promoted-rule evaluation. */
+  features?: Record<string, unknown>;
+  /** Optional applicant-entered PAN. The backend cross-checks it against the document's PAN. */
+  claimedPan?: string;
+  /** Password for an encrypted (password-protected) PDF. The backend decrypts it in memory so the
+   *  original signed bytes are never re-saved, preserving the signature. */
+  password?: string;
   /** Lets a caller (and TanStack Query) cancel an in-flight upload. */
   signal?: AbortSignal;
+}
+
+/**
+ * Raised when the uploaded PDF is password-protected and needs an in-app password. This is a
+ * recoverable prompt, not a verification failure: the caller shows a password field and retries with
+ * `verifyDocument(file, { password })`.
+ */
+export class PasswordRequiredError extends Error {
+  /** Set when a supplied password was incorrect (so the UI can show "wrong password, try again"). */
+  readonly passwordError?: string;
+  constructor(message: string, passwordError?: string) {
+    super(message);
+    this.name = "PasswordRequiredError";
+    this.passwordError = passwordError;
+  }
 }
 
 /**
@@ -60,6 +96,9 @@ export async function verifyDocument(file: File, opts: VerifyOptions = {}): Prom
   const form = new FormData();
   form.append("file", file, file.name);
   if (opts.docType) form.append("doc_type", opts.docType);
+  if (opts.features) form.append("features_json", JSON.stringify(opts.features));
+  if (opts.claimedPan) form.append("claimed_pan", opts.claimedPan);
+  if (opts.password) form.append("pdf_password", opts.password);
 
   let res: Response;
   try {
@@ -98,6 +137,15 @@ export async function verifyDocument(file: File, opts: VerifyOptions = {}): Prom
     json = await res.json();
   } catch {
     throw new ApiError("Verification service returned a non-JSON response.");
+  }
+
+  // An encrypted PDF returns a recoverable prompt instead of a verdict. Surface it as a typed error.
+  if (json && typeof json === "object" && (json as { needs_password?: unknown }).needs_password === true) {
+    const body = json as { reason?: string; password_error?: string };
+    throw new PasswordRequiredError(
+      body.reason ?? "This document is password-protected. Enter its password to continue.",
+      body.password_error,
+    );
   }
 
   // Validate the wire shape before any component renders it (CLAUDE.md §4).

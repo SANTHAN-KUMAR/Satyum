@@ -78,5 +78,19 @@ def build_evidence_pack(trust: TrustScore) -> dict[str, Any]:
         ],
         "pending_not_evaluated": [{"name": s.name, "reason": s.reason} for s in pending],
         "tamper_evidence_regions": tamper_regions,
+        # Layer-3 Collective Intelligence findings — surfaced as FINDINGS, never a verdict. They never
+        # entered the deterministic score; at most they raised this case to a human (PROPOSAL-001 §5.4/§8.4).
+        "network_intelligence": [
+            {
+                "source": a.source,
+                "suspicion": a.suspicion,
+                "confidence": a.confidence,
+                "explanation": a.explanation,
+                "note": "finding — not a verdict (advisory; never auto-declines, never clears)",
+                "measurements": a.measurements,
+            }
+            for a in trust.advisory_annotations
+        ],
+        "deterministic_subscore": trust.deterministic_subscore,
         "privacy_note": PRIVACY_NOTE,
     }

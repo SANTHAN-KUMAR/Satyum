@@ -31,6 +31,7 @@ from capture.challenge import ActiveChallengeAnalyzer
 # Tier 3 — live capture (camera mode)
 from capture.rectify import RectifyQualityAnalyzer
 from forensics.arithmetic import ArithmeticConsistencyAnalyzer
+from forensics.claimed_identity import ClaimedIdentityAnalyzer
 from forensics.copy_move import CopyMoveAnalyzer
 from forensics.entities import EntityExtractionAnalyzer
 from forensics.extraction.analyzer import VLMClaimGraphAnalyzer
@@ -42,6 +43,8 @@ from forensics.ocr import DocumentParseAnalyzer
 from forensics.phash import PhashResubmissionAnalyzer
 from forensics.template import TemplateFingerprintAnalyzer
 from intake.sufficiency import IntakeSufficiencyAnalyzer
+from rule_mining.analyzer import PromotedRuleAnalyzer
+from rule_mining.store import RuleStore
 from rules.analyzer import ConsistencyRulesAnalyzer
 from verification.provenance import PdfOnlyRedFlagAnalyzer
 
@@ -49,12 +52,16 @@ from verification.provenance import PdfOnlyRedFlagAnalyzer
 from verification.signature import C2paProvenanceAnalyzer, PadesSignatureAnalyzer
 
 
-def build_registry(trust_anchor_dir: str | None = None) -> AnalyzerRegistry:
+def build_registry(
+    trust_anchor_dir: str | None = None, rule_store: RuleStore | None = None
+) -> AnalyzerRegistry:
     """Construct and return the fully-wired analyzer registry.
 
     Args:
         trust_anchor_dir: optional override for the pinned PKI / C2PA trust store, forwarded to the
             signature analyzers. ``None`` uses ``settings.trust_anchor_dir``.
+        rule_store: the shared store of analyst-approved promoted rules (§6.3.1); the live store the
+            ``PromotedRuleAnalyzer`` fires. ``None`` wires an empty store (the analyzer then fires nothing).
     """
     registry = AnalyzerRegistry()
 
@@ -87,6 +94,9 @@ def build_registry(trust_anchor_dir: str | None = None) -> AnalyzerRegistry:
     # fraud-ring hit raise measurements["hard_reject"]. Deferred as a persistence-layer unit (ADR-005
     # federated memory), not a logic gap — the detector itself is real and tested (tests/test_phash.py).
     registry.register(EntityExtractionAnalyzer())                          # layer 3, order 45 (FILE)
+    registry.register(ClaimedIdentityAnalyzer())                           # layer 3, order 46 (FILE)
+    # --- Stage 3: human-approved promoted rules (deterministic, over engineered features) -------
+    registry.register(PromotedRuleAnalyzer(store=rule_store))             # layer 3, order 50 (ANY)
 
     # --- Tier 3: anti-spoof votes (CAMERA) — low/medium-weight, never standalone gates ----------
     registry.register(SpectralMoireAnalyzer())                             # layer 1 (camera)

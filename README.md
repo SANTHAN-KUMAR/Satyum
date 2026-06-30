@@ -64,6 +64,7 @@ structurally separated: **source-of-truth** (authoritative), **understanding** (
 | **5 · Anomaly (hybrid, soft)** | stats deterministic; ML lane off by default | A deterministic statistical backbone (round-number synthetic credits, salary jumps, cherry-picked windows) + an **optional, flag-gated, experimental ML lane**. **REVIEW-only** — anomaly can raise review, never approve or reject. |
 | **6 · Corroboration** *(deterministic)* | fully deterministic | Cross-document / cross-source: identity must agree across statement ↔ ID ↔ deed; income across statement ↔ salary slip ↔ Form-16/ITR; perceptual-hash resubmission memory. Single doc / no overlap → `INSUFFICIENT_CORROBORATION` → REVIEW. |
 | **7 · Decision brain** *(deterministic, fail-closed)* | fully deterministic | A guarded policy engine → **APPROVE / REVIEW / REJECT / PENDING**, with the golden-rule guards as structural invariants (VLM alone can never approve; arithmetic-clean alone ≠ genuine; anomaly alone can never reject; missing evidence never becomes a pass). |
+| **Interpretability** *(downstream, read-only)* | explains, never decides | A **narrator** turns the finished evidence pack into a 3-paragraph plain-English summary, and an **underwriter copilot** answers follow-up questions via MCP-style read-only tools over the *frozen* pack. A **firewall** discards any narrative that contradicts the verdict and always shows the true one; on any LLM failure it falls back to a deterministic narrative. The interpreter is decoupled from the vision reader (a text reasoner can narrate while a separate VLM reads). See [ADR-006](architecture/ADR-006-interpretability-and-resilience.md). |
 | **In-person escalation** | mode-tagged | WebRTC capture for wet-ink / contested *physical* documents: rectify + quality gate, the **active 3D challenge**, anti-spoof votes (moiré/specular/temporal). Stops *presentation* attacks; injection is a documented, low-weight gate. |
 
 ### What we deliberately DON'T do (and why)
@@ -79,6 +80,22 @@ and explainable down to the contributing signals; the VLM extraction is bounded 
 numeric cross-read, and the self-hosted production path (Qwen2.5-VL pinned in-perimeter) restores
 full extraction reproducibility too.
 
+### Real-world ingestion resilience (see [ADR-006](architecture/ADR-006-interpretability-and-resilience.md))
+
+Real government/bank documents are messy; the pipeline handles that honestly rather than failing closed
+on legitimate inputs:
+
+- **Password-protected PDFs.** Aadhaar PDFs, CAMS/Karvy CAS, and signed bank e-statements ship
+  encrypted. Satyum **detects** encryption and returns a recoverable *password-required* response (not a
+  fraud signal, not an error); the applicant enters the password in-app and the backend **decrypts in
+  memory** at every consumer, never re-saving. This **preserves the digital signature** — a 3rd-party
+  "remove password" tool re-saves the file and destroys it; in-memory decrypt keeps it intact (verified
+  end-to-end). The onboarding flow collects the password inline and resubmits.
+- **Misparse-resistant arithmetic.** When the deterministic text-layer fallback misreads a balance cell
+  (e.g. a stray `1` amid lakh-scale balances), a plausibility / cross-read gate drops the off-scale
+  figure instead of cascading it into a false REJECT — an all-misparse break resolves to
+  `NOT_EVALUATED` (pending → REVIEW), while a *plausible* edited figure (a real tamper) still flags.
+
 ---
 
 ## Repository layout
@@ -87,14 +104,19 @@ full extraction reproducibility too.
 Satyum/
 ├── architecture/            ← the authoritative design (read these)
 │   ├── ADR-004              ← v2 architecture of record (VLM reads · rules decide)
+│   ├── ADR-005              ← federated fraud intelligence (consortium roadmap)
+│   ├── ADR-006              ← interpretability layer · password-PDF decrypt · arithmetic misparse gate
 │   ├── ADR-001 … ADR-003    ← dual-mode · provenance-first · innovation thesis (built on)
 │   ├── RESEARCH-001         ← industry landscape grounding
 │   ├── BUILD-MANIFEST.md    ← what's real / gated, with must-fail fixtures
 │   └── TESTING-STRATEGY.md  ← the adversarial test regime
 ├── backend/                 ← FastAPI; provenance + claim-graph + deterministic decision core
 │   ├── app/                 ← routes + orchestrator + mode-keyed registry + contracts (+ claim graph, VLMExtractor / AnomalyDetector / rule-pack interfaces)
-│   ├── verification/        ← source-of-truth crypto/provenance (PAdES, C2PA)
-│   ├── forensics/           ← rule packs (arithmetic → financial pack), OCR cross-read verifier, metadata, copy-move, pHash, cross-doc, entities
+│   ├── verification/        ← source-of-truth crypto/provenance (PAdES, C2PA) + in-memory password-PDF decrypt
+│   ├── forensics/           ← rule packs (arithmetic → financial pack, w/ misparse cross-read gate), OCR cross-read verifier, metadata, copy-move, pHash, cross-doc, entities
+│   ├── interpretability/    ← read-only narrator + underwriter copilot (MCP-style tools), firewalled off the verdict
+│   ├── federation/          ← consortium ring detection / fraud-hash registry / advisory firewall (ADR-005)
+│   ├── providers/           ← source-of-truth providers (Aadhaar offline e-KYC, PAN, DigiLocker, Account Aggregator)
 │   ├── capture/             ← in-person escalation camera (active challenge, anti-spoof, rectify)
 │   └── risk/                ← scoring + evidence pack + hash-chained audit ledger
 ├── frontend/                ← React 18 + TS + Vite + Tailwind — the evidence console
@@ -118,7 +140,14 @@ SATYUM_TRUST_ANCHOR_DIR="../samples/trust" uvicorn app.main:app --reload
 > [ADR-004](architecture/ADR-004-v2-progressive-evidence-architecture.md) §7 the `VLMExtractor`
 > interface takes a **cloud VLM API key** for the POC (e.g. `ANTHROPIC_API_KEY`) and swaps to a
 > **self-hosted vLLM endpoint serving Qwen2.5-VL** in production — a config/env change, no rewrite.
-> See [`DEPLOY.md`](DEPLOY.md) for the env contract.
+> The reader is **provider-agnostic**: alongside the native anthropic / gemini / groq readers, one
+> OpenAI-compatible extractor (`SATYUM_VLM_BASE_URL`, plus `SATYUM_VLM_CLOUDFLARE_ACCOUNT_ID` for
+> Workers AI) serves **Cloudflare Workers AI, OpenRouter, Together, DeepInfra, Fireworks, and local
+> Ollama** — all behind the same box-grounded, cross-read trust boundary. (Cloudflare/Mistral-Small
+> works for short docs; dense multi-page statements want a higher-throughput reader — Gemini / Claude /
+> self-hosted Qwen2.5-VL.) The **interpretability** narrator/copilot can run on a *separate* text
+> reasoner (`SATYUM_INTERPRET_*`, e.g. DeepSeek v4) — unset → it reuses the reader credential. See
+> [`DEPLOY.md`](DEPLOY.md) for the env contract.
 
 **Frontend** (from `frontend/`, Node 18+):
 ```bash

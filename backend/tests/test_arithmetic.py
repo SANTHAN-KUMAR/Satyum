@@ -101,3 +101,55 @@ def test_every_tampered_variant_is_flagged(stmt_fn):
     sig = az.analyze(_ctx_with(stmt_fn()))
     assert sig.status == SignalStatus.VALID
     assert sig.suspicion is not None and sig.suspicion > 0.5
+
+
+# --- misparse / cross-read plausibility gate ------------------------------------------------------
+# A genuine statement whose extraction misreads a balance cell as an off-scale figure (e.g. "1" amid
+# ~₹14k balances — the real dad_canara_statement failure) must NOT be condemned as tampered. The break
+# is a parse error, so the engine returns NOT_EVALUATED (pending → REVIEW), never a false REJECT — while
+# a *plausible* edited figure (a real tamper) stays flagged. This is the §3.1 cross-read invariant.
+import copy  # noqa: E402
+
+
+def _genuine_with_balance(index: int, value: str) -> StatementData:
+    stmt = copy.deepcopy(genuine_statement())
+    stmt.transactions[index].balance = Decimal(value)
+    return stmt
+
+
+def test_offscale_misparse_last_row_is_pending_not_tampered():
+    # the exact real-docs failure: the LAST balance is garbage-parsed as "1"
+    result = check_consistency(_genuine_with_balance(2, "1"))
+    assert result.evaluated is False, "an off-scale misparse must be pending, never a confident tamper"
+    assert not result.violations
+    assert "misparse" in result.reason.lower()
+
+
+def test_offscale_misparse_middle_row_does_not_cascade():
+    # a misparse in the MIDDLE must not manufacture a downstream 'plausible' violation
+    result = check_consistency(_genuine_with_balance(1, "1"))
+    assert result.evaluated is False
+    assert not result.violations  # no cascade into row 2
+
+
+def test_plausible_edit_still_flags_despite_the_guard():
+    # a real single-field edit (15,000 -> 16,000) is at-scale, so the guard does NOT excuse it
+    result = check_consistency(tampered_balance_statement())
+    assert result.evaluated is True
+    assert any(v.kind == "running_balance" for v in result.violations)
+
+
+def test_misparse_plus_real_tamper_still_flags():
+    # garbage in one cell must not hide a genuine, plausible edit elsewhere
+    stmt = _genuine_with_balance(2, "1")          # misparse on the last row
+    stmt.transactions[0].balance = Decimal("16000")  # real tamper on row 0
+    result = check_consistency(stmt)
+    assert result.evaluated is True
+    assert result.violations, "a plausible edit must survive even when another cell is a misparse"
+
+
+def test_analyzer_surfaces_misparse_as_not_evaluated():
+    az = ArithmeticConsistencyAnalyzer()
+    sig = az.analyze(_ctx_with(_genuine_with_balance(2, "1")))
+    assert sig.status == SignalStatus.NOT_EVALUATED
+    assert sig.suspicion is None  # never a fabricated pass OR a false tamper
