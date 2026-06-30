@@ -1,4 +1,8 @@
-# 🔐 Satyum — High-Level Architecture
+# Satyum — High-Level Architecture
+
+> **SUPERSEDED** — This document describes the v1 architecture. The authoritative design is
+> [ADR-004 — v2 progressive evidence architecture](ADR-004-v2-progressive-evidence-architecture.md)
+> (VLM understanding → canonical claim graph → deterministic decisioning). Kept for historical context only.
 
 > **SuRaksha Cyber Hackathon 2.0 | Canara Bank**
 > Theme 1: Real-Time Anomaly Detection in Financial Documents

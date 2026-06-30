@@ -18,6 +18,13 @@ cryptography==49.0.0
 asn1crypto==1.5.1
 c2pa-python==0.36.0          # new Reader/Context/Settings API (verified against this pin)
 
+# --- Layer 2: VLM document understanding (ADR-004 §2/§5) ---
+# The default cloud reader (POC). The interface is provider-agnostic: install google-genai for the
+# Gemini backend, or sarvamai for the (client-pending) Indic specialist — each SDK is lazy-imported so
+# only the provider you deploy needs to be present (extraction/factory.py selects by SATYUM_VLM_*).
+anthropic==0.112.0
+google-genai==2.10.0     # SATYUM_VLM_PROVIDER=gemini (default for POC; Claude key not required)
+
 # --- Tier 2: document forensics / OCR / CV ---
 pikepdf==10.9.1
 pymupdf==1.27.2.3

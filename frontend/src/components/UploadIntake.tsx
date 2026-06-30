@@ -1,3 +1,4 @@
+import { AlertTriangle, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "@/api/client";
 import { useVerifyDocument } from "@/hooks/useVerifyDocument";
@@ -129,12 +130,12 @@ export function UploadIntake() {
         />
         <span
           className={cn(
-            "flex h-12 w-12 items-center justify-center rounded-full border text-xl transition-colors",
+            "flex h-12 w-12 items-center justify-center rounded-full border transition-colors",
             isDragging ? "border-accent text-accent" : "border-hairline text-slate-400 group-hover:text-accent",
           )}
           aria-hidden="true"
         >
-          ⤓
+          <UploadCloud size={22} strokeWidth={1.75} />
         </span>
         <div>
           <p className="text-sm font-semibold text-slate-100">
@@ -158,7 +159,7 @@ export function UploadIntake() {
           tone="error"
           title="That file can't be verified"
           detail={dropError}
-          icon={<span className="text-2xl">⚠</span>}
+          icon={<AlertTriangle size={26} className="text-verdict-rejected" />}
         />
       )}
 
@@ -184,7 +185,7 @@ export function UploadIntake() {
               )}
             </>
           }
-          icon={<span className="text-2xl">⚠</span>}
+          icon={<AlertTriangle size={26} className="text-verdict-rejected" />}
           action={
             <div className="flex gap-2">
               <button

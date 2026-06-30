@@ -1,3 +1,15 @@
+import {
+  MoveDown,
+  MoveLeft,
+  MoveRight,
+  MoveUp,
+  RotateCcw,
+  RotateCw,
+  ScanLine,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ServerChallengeMessage } from "@/api/types";
 import { cn } from "@/lib/cn";
@@ -6,16 +18,16 @@ interface ChallengeOverlayProps {
   challenge: ServerChallengeMessage | null;
 }
 
-/** Directional glyph for the active 3D challenge command (decorative; instruction text is authoritative). */
-const KIND_GLYPH: Record<string, string> = {
-  "tilt-left": "⮈",
-  "tilt-right": "⮊",
-  "tilt-up": "⮉",
-  "tilt-down": "⮋",
-  "rotate-cw": "↻",
-  "rotate-ccw": "↺",
-  "move-closer": "⊕",
-  "move-away": "⊖",
+/** Directional icon for the active 3D challenge command (the instruction text is authoritative). */
+const KIND_ICON: Record<string, LucideIcon> = {
+  "tilt-left": MoveLeft,
+  "tilt-right": MoveRight,
+  "tilt-up": MoveUp,
+  "tilt-down": MoveDown,
+  "rotate-cw": RotateCw,
+  "rotate-ccw": RotateCcw,
+  "move-closer": ZoomIn,
+  "move-away": ZoomOut,
 };
 
 /**
@@ -37,6 +49,7 @@ export function ChallengeOverlay({ challenge }: ChallengeOverlayProps) {
   if (!challenge) return null;
 
   const expired = remainingMs <= 0;
+  const Icon = KIND_ICON[challenge.kind] ?? ScanLine;
 
   return (
     <div
@@ -51,10 +64,10 @@ export function ChallengeOverlay({ challenge }: ChallengeOverlayProps) {
         )}
       >
         <span
-          className={cn("text-2xl", expired ? "text-verdict-rejected" : "animate-pulse-ring text-accent")}
+          className={cn(expired ? "text-verdict-rejected" : "animate-pulse-ring text-accent")}
           aria-hidden="true"
         >
-          {KIND_GLYPH[challenge.kind] ?? "▣"}
+          <Icon size={26} strokeWidth={2} />
         </span>
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">

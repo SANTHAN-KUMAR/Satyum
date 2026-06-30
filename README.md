@@ -15,41 +15,69 @@ tamper-evident audit trail, wrapped around the document-fraud use case.
 
 ## The idea in one line
 
-> **A forger can fake a document's pixels, but cannot keep its *logic* coherent.**
+> **The model *reads*; deterministic rules *decide*.** A forger can fake a document's pixels, but
+> cannot keep its *logic* coherent — and that logic is judged by rules, never by the model.
 
 Provenance and open-banking already solve the *sourceable* document. The unsolved frontier — where
 GenAI forgeries now win and pixel-forensics collapse — is the **un-sourceable** document (scanned
-paper, co-op/regional statements, thin-file borrowers, wet-ink deeds). Satyum attacks the
-**consistency layer, not the pixels**:
+paper, co-op/regional statements, thin-file borrowers, wet-ink deeds). The deterministic
+consistency engine that attacks this — recomputing a document's logic instead of guessing its
+pixels — was always the crown jewel; v1's real weakness was a **template-brittle parser** that
+could only feed it one hardcoded statement layout. **v2 widens the mouth without softening the
+judgment:** a vision-language model (VLM) *reads* arbitrary layouts into a **canonical claim graph**,
+and the decision path stays deterministic, auditable, and fail-closed — now operating on normalised
+claims instead of one fixed template. The VLM is an **untrusted, box-grounded, cross-verified input;
+it never judges** (see [ADR-004](architecture/ADR-004-v2-progressive-evidence-architecture.md) §5).
 
-1. **Arithmetic / cross-field consistency** *(primary signal)* — recompute every invariant (running
-   balance, totals, net reconciliation); a single edited figure breaks the maths and is localised to
-   the exact cell. Pure logic, zero black-box ML.
-2. **Active 3D challenge** — a server-randomised physical tilt, verified by homography (a flat
-   screen-replay can't satisfy it).
-3. **Cross-document consistency graph** — the same identity (PAN/Aadhaar/name/DOB…) must agree across
-   the statement ↔ ID ↔ deed bundle; a mismatch is near-dispositive.
+1. **Domain rule packs over the claim graph** *(primary signal)* — the financial pack recomputes
+   every invariant (running balance, totals, net reconciliation, salary/income reconciliation); a
+   single edited figure breaks the maths and is localised to the exact cell. Real land/title and
+   legal/contract packs are **real-but-scoped** (every uncovered invariant returns `NOT_EVALUATED`,
+   never a faked pass). Pure `Decimal` logic — the judgment is ML-free.
+2. **VLM understanding, deterministically guarded** — every numeric claim is **independently
+   re-read by a deterministic OCR** on its exact crop; the two must agree within tolerance or the
+   claim is `NOT_EVALUATED`. This neutralises hallucination-laundering and prompt injection
+   structurally — the number's authority comes from grounded, re-verified transcription, not the
+   model's "understanding."
+3. **Cross-document / cross-source corroboration** — the same identity (PAN/Aadhaar/name/DOB…) must
+   agree across the statement ↔ ID ↔ deed bundle, and income claims must reconcile across
+   statement ↔ salary slip ↔ Form-16/ITR; a hard mismatch is near-dispositive.
 4. **Resubmission / fraud-ring memory** — perceptual hashing catches the same forged doc reused.
+5. **Active 3D challenge** — for wet-ink / contested *physical* documents, a server-randomised
+   physical tilt verified by homography (a flat screen-replay can't satisfy it), re-scoped to the
+   in-person escalation path.
 
-## The verification waterfall (provenance first → forensics → in-person)
+## The pipeline (provenance first → understanding → judgment → in-person)
 
-Every signal is **mode-tagged** and runs only where its evidence physically exists (a file-forensic
-signal can never show "passed" on a camera frame).
+A progressive-evidence waterfall: verify what can be verified, read what can't, judge with
+deterministic rules, corroborate across the bundle, and **fail closed** when evidence is
+insufficient. Every signal is **mode-tagged** and runs only where its evidence physically exists (a
+file-forensic signal can never show "passed" on a camera frame). The three tiers of *trust* are
+structurally separated: **source-of-truth** (authoritative), **understanding** (untrusted, grounded),
+**judgment** (deterministic authority) — see [ADR-004](architecture/ADR-004-v2-progressive-evidence-architecture.md) §2.
 
-| Tier | When | What runs |
+| Layer | Trust posture | What runs |
 |---|---|---|
-| **1 · Source-of-truth** | always, on files | **PAdES/CMS signature** verification chaining to a pinned PKI root (pyHanko), + **C2PA** content-provenance (trust-list pinned). Pass → integrity answered at the root; fail → **fail-closed**. |
-| **2 · Forensic fallback** | no verifiable source | **OCR + arithmetic consistency (primary)**, PDF structure/metadata + shadow-attack detection, copy-move (ORB+RANSAC), font/layout anomaly, perceptual-hash resubmission, cross-document identity graph. |
-| **3 · Live capture** | wet-ink / contested | WebRTC capture: rectify + quality gate, the **active 3D challenge**, anti-spoof votes (moiré/specular/temporal). Stops *presentation* attacks. |
+| **1 · Source of truth** *(authoritative)* | fully deterministic | **PAdES/CMS signature** verification chaining to a pinned PKI root (pyHanko) — a signature counts only when `intact ∧ valid ∧ trusted ∧ coverage == ENTIRE_FILE`, catching attacker-cert chains and appended-byte/shadow attacks — plus **C2PA** content-provenance (trust-list pinned). Verified = byte-authenticity, **not** claim-truthfulness, so verified claims still flow into corroboration (no over-short-circuit). |
+| **2–3 · Understanding** *(untrusted input)* | probabilistic, *bounded* | A **VLM reads arbitrary layouts** → typed fields/tables, each with `page + bbox + confidence`, into a **canonical claim graph**. Every numeric claim is independently re-read by deterministic OCR (the demoted Tesseract table-parser) and must agree, or it is `NOT_EVALUATED`. The VLM has **zero decision authority**. |
+| **4 · Judgment — rule packs** *(deterministic)* | fully deterministic | **Domain ontology + rule packs over the claim graph**: financial (production-depth — running balance, totals, net + salary/income reconciliation), land/title and legal/contract (real-but-scoped). Each rule returns `PASS / FAIL / UNKNOWN / NOT_APPLICABLE / NOT_EVALUATED`. |
+| **5 · Anomaly (hybrid, soft)** | stats deterministic; ML lane off by default | A deterministic statistical backbone (round-number synthetic credits, salary jumps, cherry-picked windows) + an **optional, flag-gated, experimental ML lane**. **REVIEW-only** — anomaly can raise review, never approve or reject. |
+| **6 · Corroboration** *(deterministic)* | fully deterministic | Cross-document / cross-source: identity must agree across statement ↔ ID ↔ deed; income across statement ↔ salary slip ↔ Form-16/ITR; perceptual-hash resubmission memory. Single doc / no overlap → `INSUFFICIENT_CORROBORATION` → REVIEW. |
+| **7 · Decision brain** *(deterministic, fail-closed)* | fully deterministic | A guarded policy engine → **APPROVE / REVIEW / REJECT / PENDING**, with the golden-rule guards as structural invariants (VLM alone can never approve; arithmetic-clean alone ≠ genuine; anomaly alone can never reject; missing evidence never becomes a pass). |
+| **In-person escalation** | mode-tagged | WebRTC capture for wet-ink / contested *physical* documents: rectify + quality gate, the **active 3D challenge**, anti-spoof votes (moiré/specular/temporal). Stops *presentation* attacks; injection is a documented, low-weight gate. |
 
 ### What we deliberately DON'T do (and why)
 
 Honesty is a feature here. Industry-**distrusted**, near-chance, or unvalidated techniques are
 **excluded or `NOT_EVALUATED`**, never faked into a green pass: **ELA, PRNU, LSB/DCT steganalysis,
-neural GANs/GradCAM heatmaps** (collapse on GenAI forgeries), and **rPPG / micro-expression / deepfake**
-(belong only to a separate, consented face-KYC mode — they **never feed the document score**). The
-decision path is **deterministic — classical CV + cryptography + logic, no black-box ML** — so every
-verdict is reproducible and explainable down to the contributing signals.
+neural GANs/GradCAM heatmaps** (collapse on GenAI forgeries — the VLM is an *understanding* layer,
+**not** a pixel-forgery detector, so this exclusion stands), and **rPPG / micro-expression / deepfake**
+(belong only to a separate, consented face-KYC mode — they **never feed the document score**). And
+the model that reads never decides: **no ML/VLM sits in the decision path.** Determinism runs
+**from the claim graph onward** — given the same claim graph and config, a verdict is reproducible
+and explainable down to the contributing signals; the VLM extraction is bounded by box-grounding +
+numeric cross-read, and the self-hosted production path (Qwen2.5-VL pinned in-perimeter) restores
+full extraction reproducibility too.
 
 ---
 
@@ -58,15 +86,16 @@ verdict is reproducible and explainable down to the contributing signals.
 ```
 Satyum/
 ├── architecture/            ← the authoritative design (read these)
-│   ├── ADR-001 … ADR-003    ← dual-mode · provenance-first · innovation thesis
+│   ├── ADR-004              ← v2 architecture of record (VLM reads · rules decide)
+│   ├── ADR-001 … ADR-003    ← dual-mode · provenance-first · innovation thesis (built on)
 │   ├── RESEARCH-001         ← industry landscape grounding
 │   ├── BUILD-MANIFEST.md    ← what's real / gated, with must-fail fixtures
 │   └── TESTING-STRATEGY.md  ← the adversarial test regime
-├── backend/                 ← FastAPI; deterministic verification core (269 tests)
-│   ├── app/                 ← routes + orchestrator + mode-keyed registry + contracts
-│   ├── verification/        ← Tier-1 crypto/provenance (PAdES, C2PA)
-│   ├── forensics/           ← Tier-2 (arithmetic, OCR, metadata, copy-move, pHash, cross-doc, entities)
-│   ├── capture/             ← Tier-3 camera (active challenge, anti-spoof, rectify)
+├── backend/                 ← FastAPI; provenance + claim-graph + deterministic decision core
+│   ├── app/                 ← routes + orchestrator + mode-keyed registry + contracts (+ claim graph, VLMExtractor / AnomalyDetector / rule-pack interfaces)
+│   ├── verification/        ← source-of-truth crypto/provenance (PAdES, C2PA)
+│   ├── forensics/           ← rule packs (arithmetic → financial pack), OCR cross-read verifier, metadata, copy-move, pHash, cross-doc, entities
+│   ├── capture/             ← in-person escalation camera (active challenge, anti-spoof, rectify)
 │   └── risk/                ← scoring + evidence pack + hash-chained audit ledger
 ├── frontend/                ← React 18 + TS + Vite + Tailwind — the evidence console
 ├── samples/                 ← synthetic drag-and-drop test corpus + generator + manifest
@@ -82,9 +111,14 @@ Satyum/
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
-# Point Tier-1 at the demo trust anchor so the sample signed PDF verifies:
+# Point source-of-truth verification at the demo trust anchor so the sample signed PDF verifies:
 SATYUM_TRUST_ANCHOR_DIR="../samples/trust" uvicorn app.main:app --reload
 ```
+> **VLM understanding (Layer 2) is a config-driven dependency.** Per
+> [ADR-004](architecture/ADR-004-v2-progressive-evidence-architecture.md) §7 the `VLMExtractor`
+> interface takes a **cloud VLM API key** for the POC (e.g. `ANTHROPIC_API_KEY`) and swaps to a
+> **self-hosted vLLM endpoint serving Qwen2.5-VL** in production — a config/env change, no rewrite.
+> See [`DEPLOY.md`](DEPLOY.md) for the env contract.
 
 **Frontend** (from `frontend/`, Node 18+):
 ```bash

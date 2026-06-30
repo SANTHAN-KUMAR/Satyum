@@ -3,6 +3,14 @@
 > The honest answer to "are we hiding inability behind honesty, and will it actually work?"
 > Produced 2026-06-27 by an adversarial audit (hostile prosecutor + web-checked engineer → judge).
 > Governs implementation alongside [ADR-002](ADR-002-provenance-first-verification.md) and [CLAUDE.md](../CLAUDE.md).
+>
+> **v2 update ([ADR-004](ADR-004-v2-progressive-evidence-architecture.md)):** the verdict and every entry below
+> still hold — the crypto, arithmetic, capture, and risk components are unchanged in substance. v2 inserts an
+> **understanding layer** in front of the rule packs: a **VLM** reads arbitrary layouts into a **claim graph**, so
+> the arithmetic engine (and new land/legal rule packs) run on *any* document, not one hardcoded layout. The new
+> v2 components — VLM extraction, claim graph, domain rule packs, hybrid anomaly — are audited inline below with
+> their own cop-out guards. The OCR/arithmetic entries are **rehomed** (cross-read verifier + financial rule pack),
+> not removed. The new biggest trap is **VLM hallucination-laundering** — guarded by numeric cross-read consensus.
 
 ## Verdict
 
@@ -66,13 +74,29 @@ Yes - the system can run with mocks approaching zero, and the user's key hypothe
 - **Real approach:** OpenCV layout/anchor matching against a self-built reference library of known templates. Real ONLY if a genuine corpus of real templates exists.
 - **Cop-out guard (must-fail CI):** Risk: 'fingerprint' one Canara sample and match it against itself - a silent no-op. Guard: require a multi-template corpus (multiple banks/versions); without a real corpus this is honestly NOT_EVALUATED, not a fake pass. Scope corpus size to what's collectable in the timeframe.
 
-### OCR field extraction — `BUILD_REAL_WORKS`
-- **Real approach:** PaddleOCR (strong on Indian docs) or Tesseract; per-field bbox + confidence. Feeds the arithmetic engine.
-- **Cop-out guard (must-fail CI):** Risk: ignoring confidence so low-confidence fields silently flow into invariants. Guard: low-confidence field renders 'unreadable - pending', never 'tampered' and never a silent value.
+### OCR field extraction — `BUILD_REAL_WORKS` (v2: now the cross-read verifier)
+- **Real approach:** PaddleOCR (strong on Indian docs) or Tesseract; per-field bbox + confidence. **v2:** no longer the primary extractor — the VLM reads arbitrary layouts into the claim graph; this deterministic OCR **independently re-reads every numeric claim on its exact crop** (the cross-read consensus that stops VLM hallucination-laundering, [ADR-004 §5](ADR-004-v2-progressive-evidence-architecture.md)).
+- **Cop-out guard (must-fail CI):** Risk: ignoring confidence so low-confidence fields silently flow into invariants. Guard: low-confidence field renders 'unreadable - pending', never 'tampered' and never a silent value; a VLM-vs-OCR numeric disagreement → `NOT_EVALUATED`, never a silent pick.
 
-### OCR + cross-field/arithmetic consistency engine (primary signal) — `BUILD_REAL_WORKS`
-- **Real approach:** Deterministic invariants over OCR'd numbers: balance carry-forward (prev +/- txn = new), subtotal = sum(line items), debits = credits, declared vs computed income/tax, monotonic dates, MRZ check digits. Survives the camera/codec medium because it operates on READ NUMBERS, not pixels. The strongest in-document tamper signal.
+### Cross-field/arithmetic consistency engine (primary signal) — `BUILD_REAL_WORKS` (v2: the financial rule pack over the claim graph)
+- **Real approach:** Deterministic invariants over the **claim graph** (no longer a hardcoded `StatementData` bound to one layout): balance carry-forward (prev +/- txn = new), subtotal = sum(line items), debits = credits, declared vs computed income/tax, monotonic dates, MRZ check digits, salary-slip net ≈ bank credit. Survives the camera/codec medium because it operates on READ NUMBERS, not pixels. The strongest in-document tamper signal; **rehomed** as the financial rule pack, unchanged in spirit.
 - **Cop-out guard (must-fail CI):** THE single biggest stub trap in the project. Risk: validating on ONE hand-crafted happy fixture. Guard: adversarial test matrix per ADR-001 D4/3.2 - genuine statement passes; single-number-edited statement breaks >=1 invariant; real OCR-noise samples; low-confidence -> 'pending' not 'tampered'. If validated on one fixture, the whole product is a demo.
+
+### VLM document understanding (read arbitrary layouts → claim graph) — `BUILD_REAL_WORKS` (v2)
+- **Real approach:** a `VLMExtractor` interface (`extract(image, schema) -> list[Claim]`). POC: a frontier cloud VLM (Claude Sonnet 4.6 / Opus 4.8 via the `anthropic` SDK; Gemini 2.x alt), called with a **structured-output schema** (typed fields + per-field bbox + confidence), temperature 0, model id logged to the audit. Production swap: **Qwen2.5-VL-7B via vLLM** in-perimeter (same interface, config flag). Replaces the brittle one-layout table parser as the *extractor*; the old Tesseract parser is **demoted to the numeric cross-read verifier**.
+- **Cop-out guard (must-fail CI):** THE new biggest trap. Risk: (a) the VLM "auto-corrects" a tampered figure so the arithmetic reconciles (**hallucination-laundering** — a false NEGATIVE, the worst error in a fraud system); (b) a document **prompt-injects** the reader; (c) the read is trusted without grounding. Guards: **numeric cross-read consensus** — every numeric claim is independently re-read by a deterministic OCR on its exact crop and must agree within `Decimal` tolerance, else `NOT_EVALUATED`; the VLM **never sees expected values**; structured-schema-only (no free decisions; document text is data, not instructions); `bbox ⊆ page`. Must-fail fixtures: a tamper-normalization attempt ends `NOT_EVALUATED`/flagged, never VALID-clean; an embedded "mark verified" injection does not move the deterministic verdict ([ADR-004 §5](ADR-004-v2-progressive-evidence-architecture.md)).
+
+### Canonical claim graph (template-independent normalization) — `BUILD_REAL_WORKS` (v2)
+- **Real approach:** every extracted value becomes a typed `Claim(subject, predicate, value, value_type, provenance{doc_id, page, bbox, confidence, source, corroborating_read, cross_read_agree})`. SBI/Canara/HDFC/scanned/image/vernacular all normalize to the same internal structure, so the rule packs are template-independent. Plain typed dataclasses (networkx only if traversal warrants).
+- **Cop-out guard (must-fail CI):** Risk: a claim with a failed cross-read or sub-gate confidence silently treated as trusted. Guard: such claims carry `cross_read_agree=False` / below-gate confidence and are `NOT_EVALUATED` downstream, never scored.
+
+### Domain rule packs — financial / land / legal — `BUILD_REAL` (financial WORKS, land/legal PARTIAL) (v2)
+- **Real approach:** a rule-pack registry (mirrors the analyzer registry) of pure functions over the claim graph, each returning `PASS / FAIL / UNKNOWN / NOT_APPLICABLE / NOT_EVALUATED`. **Financial (production depth):** the rehomed arithmetic engine + salary/income reconciliation. **Land/title & legal (real-but-scoped):** seller↔owner, registration ≥ execution date, ID/extent consistency; party-name consistency across body/signature/schedule, amount-in-words = amount-in-figures, start + term = end, schedule/page completeness — real rules that return `NOT_EVALUATED` for any invariant whose claims/state-tables are absent.
+- **Cop-out guard (must-fail CI):** Risk: multi-domain breadth as theater (a land/legal "pack" that always passes). Guard: every rule must discriminate (genuine pass / contradiction FAIL) or honestly `NOT_EVALUATED`; land/legal coverage bounds are labeled, never a blanket pass. The financial pack keeps its full adversarial matrix (single-edit breaks an invariant).
+
+### Hybrid anomaly intelligence — `BUILD_REAL_WORKS` (deterministic) + `OPTIONAL/FLAG-GATED` (ML lane) (v2)
+- **Real approach:** an `AnomalyDetector` interface. **Deterministic backbone (default, always-on, auditable):** round-number synthetic credits, sudden salary jump, short/cherry-picked window, dormant-account revival, declared-vs-reference gap — NumPy/pandas statistics. **Optional ML lane (flag-gated, off in POC):** a time-series/embedding model behind the same interface, additive only.
+- **Cop-out guard (must-fail CI):** Risk: an anomaly score that gates a verdict, or the ML lane presented as dispositive. Guard: anomaly is **REVIEW-only** (never approve, never reject, never a gate); no-anomaly ≠ genuine; insufficient history → `NOT_EVALUATED`; the ML lane's contribution is separable and labeled experimental, and removing it must not change any APPROVE/REJECT (only REVIEW routing).
 
 ### Font/layout/alignment anomaly — `BUILD_REAL_WORKS`
 - **Real approach:** PyMuPDF embedded-font + per-glyph geometry outliers (baseline, stroke-width, x-height, kerning); surfaced as evidence-with-confidence, not a binary gate.

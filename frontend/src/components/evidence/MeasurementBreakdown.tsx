@@ -33,8 +33,24 @@ function isNarrativeKey(k: string): boolean {
   return k.endsWith("_note") || k.endsWith("_bound");
 }
 
+/** Pixel-coordinate keys are for the document overlay, not the underwriter's reading — hide them. */
+function isCoordinateKey(k: string): boolean {
+  return /bbox/i.test(k) || k === "evidence_regions";
+}
+
 function humanKey(k: string): string {
   return k.replace(/_/g, " ");
+}
+
+/** Format an arithmetic figure as Indian-format rupees (₹48,250.00) when it parses as a number. */
+function formatMoney(raw: string): string {
+  const n = Number(String(raw).replace(/,/g, "").trim());
+  if (!Number.isFinite(n)) return raw;
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+  }).format(n);
 }
 
 function formatScalar(v: unknown): string {
@@ -63,12 +79,16 @@ export function MeasurementBreakdown({
 
   const scalarEntries = entries.filter(
     ([k, val]) =>
-      !HANDLED_KEYS.has(k) && !isNarrativeKey(k) && typeof val !== "object",
+      !HANDLED_KEYS.has(k) && !isNarrativeKey(k) && !isCoordinateKey(k) && typeof val !== "object",
   );
   // Arrays/objects that aren't specially handled — render compactly so nothing is silently dropped.
   const complexEntries = entries.filter(
     ([k, val]) =>
-      !HANDLED_KEYS.has(k) && !isNarrativeKey(k) && typeof val === "object" && val !== null,
+      !HANDLED_KEYS.has(k) &&
+      !isNarrativeKey(k) &&
+      !isCoordinateKey(k) &&
+      typeof val === "object" &&
+      val !== null,
   );
   const notes = entries.filter(([k]) => isNarrativeKey(k));
 
@@ -80,22 +100,25 @@ export function MeasurementBreakdown({
     <div className="space-y-3">
       {violations.length > 0 && (
         <div>
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-verdict-rejected">
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-verdict-rejected">
             Arithmetic invariants broken
           </p>
           <ul className="space-y-1.5">
             {violations.map((v, i) => (
               <li
                 key={`${v.kind}-${v.index ?? "x"}-${i}`}
-                className="rounded-md border border-verdict-rejected/30 bg-verdict-rejected-soft px-2.5 py-1.5 text-xs"
+                className="rounded-md border border-verdict-rejected/30 bg-verdict-rejected-soft px-2.5 py-2 text-xs"
               >
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Tag tone="warn">{humanKey(v.kind)}</Tag>
                   {v.index !== null && <span className="text-slate-400">row {v.index}</span>}
                 </div>
-                <div className="mt-1 font-mono text-[11px] text-slate-300">
-                  expected <span className="text-slate-100">{v.expected}</span> · printed{" "}
-                  <span className="text-verdict-rejected">{v.printed}</span> · Δ {v.delta}
+                <div className="tnum mt-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                  <span className="text-slate-400">expected</span>
+                  <span className="font-semibold text-slate-100">{formatMoney(v.expected)}</span>
+                  <span className="text-slate-500">but printed</span>
+                  <span className="font-semibold text-verdict-rejected">{formatMoney(v.printed)}</span>
+                  <span className="text-slate-500">(Δ {formatMoney(v.delta)})</span>
                 </div>
               </li>
             ))}

@@ -28,10 +28,13 @@ def _file_ctx(stmt) -> AnalysisContext:
     return ctx
 
 
-def test_genuine_document_approves_end_to_end():
+def test_genuine_document_routes_to_review_end_to_end():
+    # ADR-004 §7 #2: a lone unsigned statement with clean arithmetic but no cross-source corroboration
+    # and no provenance is indeterminate -> REVIEW (fail-closed), never auto-APPROVE. Approval requires
+    # corroboration (bundle) or a verified source (provenance path).
     ts = run_verification(_file_ctx(genuine_statement()), _registry(), AuditLedger(), TS)
-    assert ts.verdict == Verdict.APPROVED
-    assert ts.evidence_pack["verdict"] == "APPROVED"
+    assert ts.verdict == Verdict.REVIEW
+    assert ts.evidence_pack["verdict"] == "REVIEW"
 
 
 def test_tampered_document_rejects_end_to_end():
@@ -84,4 +87,5 @@ def test_audit_chain_records_the_verdict():
     run_verification(_file_ctx(genuine_statement()), _registry(), led, TS)
     ok, broken = led.verify_chain()
     assert ok and broken is None
-    assert led.records()[0].payload["verdict"] == "APPROVED"
+    # the audit faithfully records the actual verdict (REVIEW for a lone unsigned statement, §7 #2)
+    assert led.records()[0].payload["verdict"] == "REVIEW"

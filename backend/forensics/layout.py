@@ -50,6 +50,12 @@ except ImportError as exc:  # pragma: no cover
     cv2 = None  # type: ignore[assignment]
     _IMPORT_ERROR = f"OpenCV unavailable: {exc}"
 
+# Identity documents use multi-font, multi-script UIDAI/NSDL layouts. The z-score baselines here
+# are calibrated on financial statements; running them on Aadhaar/PAN produces high false-positive
+# rates (35+ words "anomalous" on a genuine UIDAI card). Skip these doc types entirely.
+# Defined locally to avoid a circular import with intake.sufficiency.
+_IDENTITY_DOC_TYPES: frozenset[str] = frozenset({"AADHAAR", "PAN_CARD"})
+
 # --- Detector tunables. DEFAULT — needs calibration on a real corpus (CLAUDE.md §5). ----------
 MIN_WORD_CHARS = 3          # 1-2 char tokens have unstable geometry -> excluded from flagging
 MIN_OCR_CONF = 0.0          # words below this confidence are excluded (unreliable geometry)
@@ -264,6 +270,9 @@ class FontLayoutAnalyzer:
     order = 32
 
     def applicable(self, ctx: AnalysisContext) -> bool:
+        doc_type = (ctx.doc_type or "").upper()
+        if doc_type in _IDENTITY_DOC_TYPES:
+            return False  # z-score baselines calibrated for financial statements; not valid for identity docs
         ocr = ctx.shared.get("ocr")
         return isinstance(ocr, list) and len(ocr) > 0
 

@@ -178,7 +178,10 @@ class BundleTrustScore(BaseModel):
     session_id: str
     document_count: int
     documents: list[BundleDocument] = Field(default_factory=list)
-    cross_document: LayerSignal
+    cross_document: LayerSignal  # the identity corroboration signal (kept for back-compat)
+    # Every bundle-level corroboration signal (identity + cross-source income/employer, ADR-004 §6) so
+    # the console can surface both the "same person?" and the "same income story?" cross-checks.
+    corroboration: list[LayerSignal] = Field(default_factory=list)
     bundle_score: float
     bundle_verdict: Verdict
     fail_closed: bool = False

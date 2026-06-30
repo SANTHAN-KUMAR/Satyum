@@ -1,3 +1,4 @@
+import { ListChecks } from "lucide-react";
 import { Panel } from "@/components/primitives/Panel";
 
 interface ReasonsCardProps {
@@ -11,7 +12,7 @@ interface ReasonsCardProps {
  */
 export function ReasonsCard({ reasons }: ReasonsCardProps) {
   return (
-    <Panel title="Why — evidence & reasons" aside={`${reasons.length}`}>
+    <Panel title="Why — evidence & reasons" icon={ListChecks} aside={`${reasons.length}`}>
       <ol className="space-y-2">
         {reasons.map((reason, i) => (
           <li key={`${i}-${reason}`} className="flex gap-2.5 text-sm text-slate-300">

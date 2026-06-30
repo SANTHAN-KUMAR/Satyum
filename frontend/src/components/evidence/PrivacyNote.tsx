@@ -1,3 +1,5 @@
+import { ShieldCheck } from "lucide-react";
+
 interface PrivacyNoteProps {
   note: string;
 }
@@ -9,10 +11,8 @@ interface PrivacyNoteProps {
  */
 export function PrivacyNote({ note }: PrivacyNoteProps) {
   return (
-    <p className="flex items-start gap-2 rounded-lg border border-hairline bg-surface/50 px-3 py-2 text-xs text-slate-400">
-      <span aria-hidden="true" className="mt-px text-accent">
-        ⛨
-      </span>
+    <p className="flex items-start gap-2 text-xs text-slate-500 sm:max-w-md sm:text-right">
+      <ShieldCheck size={14} className="mt-px shrink-0 text-accent/80 sm:order-last" aria-hidden="true" />
       <span>{note}</span>
     </p>
   );

@@ -1,5 +1,7 @@
 # ADR-001 — Dual-Mode Intake, Signal-Medium Validity, and the Underwriting Evidence Console
 
+> **Still in force.** Built on by [ADR-004](ADR-004-v2-progressive-evidence-architecture.md) (the v2 architecture of record). Mode-tagging / provenance-first / fail-closed carry into v2 unchanged.
+
 > **Status:** Accepted · 2026-06-27 · **evolved by [ADR-002](ADR-002-provenance-first-verification.md)** (provenance-first verification waterfall, grounded by [RESEARCH-001](RESEARCH-001-industry-landscape.md))
 > **Supersedes:** the camera-only design in [HIGH_LEVEL_ARCHITECTURE.md](HIGH_LEVEL_ARCHITECTURE.md) and [LOW_LEVEL_ARCHITECTURE.md](LOW_LEVEL_ARCHITECTURE.md)
 > **Scope:** Satyum — SuRaksha Cyber Hackathon 2.0 (Canara Bank), Theme 1 (real-time anomaly detection in financial documents for underwriting)

@@ -200,7 +200,7 @@ def cross_document_signal(entities_by_doc: dict[str, ExtractedEntities]) -> Laye
         )
 
     disagreements = result.disagreements
-    measurements = {
+    measurements: dict = {
         "compared_fields": result.compared_fields,
         "documents": len(entities_by_doc),
         "comparisons": [
@@ -211,6 +211,12 @@ def cross_document_signal(entities_by_doc: dict[str, ExtractedEntities]) -> Laye
         "hard_mismatch_fields": [c.field for c in result.hard_mismatches],
         "near_match_fields": [c.field for c in result.comparisons if c.status == NEAR],
     }
+    # A TRUE hard-identifier mismatch (PAN/Aadhaar/account/IFSC/DOB differ across an applicant's own
+    # documents) is dispositive identity fraud — flag it as a hard-reject trigger so the decision brain
+    # (ADR-004 §7 golden rule #5) rejects fail-closed even if this signal ever reaches a single-document
+    # aggregate. The bundle aggregator independently floors on the same evidence (defence in depth).
+    if result.hard_mismatches:
+        measurements["hard_reject"] = True
 
     if not disagreements:
         return LayerSignal.valid(

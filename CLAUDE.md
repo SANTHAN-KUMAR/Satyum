@@ -8,10 +8,12 @@
 > ships to a regulated financial institution and will be read, audited, and extended by other engineers.
 > Engineering standards are constant; under a deadline only **scope** flexes — never **quality or integrity**.
 >
-> **Authoritative design** (read these): [ADR-001](architecture/ADR-001-dual-mode-and-signal-validity.md)
-> → [ADR-002 provenance-first](architecture/ADR-002-provenance-first-verification.md) →
-> [ADR-003 innovation thesis](architecture/ADR-003-innovation-thesis.md); grounded by
-> [RESEARCH-001](architecture/RESEARCH-001-industry-landscape.md); built per
+> **Authoritative design:** **[ADR-004 — v2 architecture of record](architecture/ADR-004-v2-progressive-evidence-architecture.md)**
+> (VLM understanding → canonical claim graph → deterministic decisioning), which builds on
+> [ADR-001 dual-mode/mode-tagging](architecture/ADR-001-dual-mode-and-signal-validity.md) and
+> [ADR-002 provenance-first](architecture/ADR-002-provenance-first-verification.md), grounded by
+> [RESEARCH-001](architecture/RESEARCH-001-industry-landscape.md). [ADR-003](architecture/ADR-003-innovation-thesis.md)
+> supplies the consistency thesis (now v2's Layer 4); its "no-ML-anywhere" stance is amended by ADR-004. Built per
 > [BUILD-MANIFEST](architecture/BUILD-MANIFEST.md). (`HIGH_LEVEL`/`LOW_LEVEL` docs are **superseded**.)
 
 ---
@@ -27,31 +29,38 @@ trust score (0–100) + an **Underwriter Evidence Pack** — before a document i
 capture security, a **threat-modeled fail-closed** pipeline, and a **tamper-evident audit** trail — wrapped
 around the document-fraud use case. (SuRaksha *Cyber* Hackathon 2.0; the security spine must read as such.)
 
-### Why we win — the innovation thesis (see [ADR-003](architecture/ADR-003-innovation-thesis.md))
+### Why we win — the innovation thesis (see [ADR-004](architecture/ADR-004-v2-progressive-evidence-architecture.md), on [ADR-003](architecture/ADR-003-innovation-thesis.md))
 Provenance/open-banking solve the *easy* (sourceable) document. The unsolved frontier — where GenAI forgeries
 now win and pixel-forensics collapse — is the **un-sourceable document** (scanned paper, co-op/regional banks
-off Account Aggregator, thin-file borrowers, wet-ink deeds, vernacular docs). Our novel, fully-real angle:
-**a forger (human or AI) can fake the pixels but cannot keep the document's *logic* coherent.** We attack the
-consistency layer, not pixels —
-1. **Arithmetic / cross-field consistency** *(primary tamper signal)* — recompute every invariant; catches edits and incoherent GenAI output. Pure logic, zero fake AI.
-2. **Active 3D challenge** — server-randomized physical challenge-response verified by homography (banks don't do this for docs).
-3. **Cross-document consistency graph** — statement ↔ ID ↔ deed agreement across the bundle.
-4. **Resubmission / fraud-ring memory (pHash)** — the same forged doc reused across applicants.
+off Account Aggregator, thin-file borrowers, wet-ink deeds, vernacular docs). Our angle: **a forger can fake the
+pixels but cannot keep the document's *logic* coherent — so let a model *read* the document, but let deterministic
+rules *decide*.** A VLM reads arbitrary layouts into a **canonical claim graph** (no template lock-in); the
+decision path stays deterministic, auditable, and fail-closed — judging claims, not pixels:
+1. **Arithmetic / cross-field consistency** *(primary tamper signal)* — recompute every invariant over the claim graph; catches edits and incoherent GenAI output. Pure logic; the VLM only reads, never judges, and every figure it reports is box-grounded and independently re-read (no hallucination-laundering — [ADR-004 §5](architecture/ADR-004-v2-progressive-evidence-architecture.md)).
+2. **Cross-document / cross-source corroboration** — statement ↔ salary-slip ↔ ITR/Form-16 ↔ ID ↔ deed agreement across the bundle.
+3. **Resubmission / fraud-ring memory (pHash)** — the same forged doc reused across applicants.
+4. **Active 3D challenge** *(in-person escalation)* — server-randomized physical challenge-response verified by homography, for wet-ink/contested physical docs (banks don't do this for documents).
 
-### The verification waterfall (provenance first → forensics → in-person)
-Each detector runs ONLY in the mode where its signal physically exists; every signal is **mode-tagged**.
+### The verification waterfall (provenance first → understand → judge → in-person)
+Progressive evidence ([ADR-004 §3](architecture/ADR-004-v2-progressive-evidence-architecture.md)). Every signal is **mode-tagged**.
 - **Tier 1 — Source-of-truth verification (first-line control), built for real, no partner.** Verify the
   document's **cryptographic signature** before trusting its bytes: PAdES/eIDAS verification (pyHanko) chaining
   to the public **CCA-India PKI** root — this covers **DigiLocker-issued docs, signed bank e-statements, and
-  signed state land RoR/EC**; plus C2PA content-provenance (trust-list pinned). Pass → integrity answered at the
-  root; fail → fail-closed. **A PDF-only submission when a source-pull was possible is itself a red flag.**
-- **Tier 2 — Trusted forensic fallback (only when no verifiable source).** PDF metadata/structure anomaly,
-  template fingerprinting, **OCR + arithmetic/cross-field consistency (primary)**, font/layout anomaly,
-  copy-move, pHash. Industry-**distrusted** pixel forensics (ELA, PRNU, steganalysis, neural GradCAM) are
-  **excluded / `NOT_EVALUATED`** — near-chance and they collapse on GenAI forgeries.
-- **Tier 3 — Live capture (in-person escalation).** WebRTC camera for wet-ink/contested docs: rectify +
-  quality-gate, the active 3D challenge (presentation-attack defense), anti-spoof votes, and a (low-weight,
-  honestly-bypassable) virtual-camera/sensor-integrity check. Stops *presentation* attacks, **not injection**.
+  signed state land RoR/EC**; plus C2PA content-provenance (trust-list pinned). Pass → strong trust floor (but
+  claims still flow to corroboration — verified = byte-authenticity, **not** claim-truthfulness); fail → fail-closed.
+  **A PDF-only submission when a source-pull was possible is itself a red flag.**
+- **Tier 2 — Understand, then judge (the fallback that now runs on *any* layout).** A **VLM reads** the document
+  (any bank, scanned, image, vernacular) into a **canonical claim graph** — extraction-only, box-grounded, every
+  number independently re-read by a deterministic OCR (cross-read consensus, [ADR-004 §5](architecture/ADR-004-v2-progressive-evidence-architecture.md)).
+  Then **deterministic rule packs decide**: arithmetic/cross-field consistency *(primary)*, plus land/legal packs,
+  PDF metadata/structure, font/layout, copy-move, pHash — each returning PASS/FAIL/UNKNOWN/`NOT_EVALUATED`.
+  **Hybrid anomaly** (deterministic stats + optional flag-gated ML lane) adds **soft REVIEW-only** signals.
+  Industry-**distrusted** pixel forensics (ELA, PRNU, steganalysis, neural GradCAM) stay **excluded** — and the
+  VLM is *understanding*, **never** a pixel-forgery detector.
+- **Tier 3 — Live capture (in-person escalation).** WebRTC camera for wet-ink/contested *physical* docs and the
+  person (seller/owner): rectify + quality-gate, the active 3D challenge (presentation-attack defense), anti-spoof
+  votes, and a (low-weight, honestly-bypassable) virtual-camera/sensor-integrity check. Stops *presentation*
+  attacks, **not injection**. Not in the financial-statement primary path.
 
 - **Client / theme:** Canara Bank · SuRaksha Cyber Hackathon 2.0 → Theme 1 (real-time document anomaly
   detection for underwriting). **Primary target document: financial statements.**
@@ -110,6 +119,12 @@ have no signal there — shipping them on the camera path and calling them "work
 survives the medium (structural/semantic/perceptual/optical-physical or cryptographic); reserve bitstream
 forensics for the real file path.
 
+**The VLM reads; it never judges — and it is untrusted input.** A model that *extracts* claims is not a signal
+that *scores* tampering. Never let VLM output set or sway a verdict; never show it an expected value (it will
+launder a tamper into consistency — the worst error in a fraud system). Every numeric claim is **box-grounded and
+independently re-read** by a deterministic OCR; disagreement → `NOT_EVALUATED`, never a silent pick. Validate VLM
+output as hostile input (prompt-injection defense). The full trust boundary is [ADR-004 §5](architecture/ADR-004-v2-progressive-evidence-architecture.md).
+
 ### 3.2 No shallow-proxy tests — EVER
 A test must verify **real, discriminative behavior**, not trivia true regardless of correctness.
 - ❌ `assert result is not None` · `isinstance(score, float)` · `0 <= score <= 100` · `len(flags) >= 0` · mocking the unit under test then asserting the mock · hardcoding expected = current output.
@@ -163,10 +178,13 @@ Design the system the way a bank's platform team would expect to inherit it.
   the *more secure* outcome: an analyzer that crashes returns `ERROR`/`NOT_EVALUATED`, never silent PASS; an
   indeterminate aggregate resolves to **REVIEW**, never auto-APPROVE. One analyzer's failure never crashes the
   verdict or the stream.
-- **Deterministic & auditable by design.** The core is **classical CV + cryptography + logic — no black-box ML**
-  in the decision path, so given the same input + config a verdict is reproducible and explainable down to the
-  contributing signals (a defensibility win with a bank; see §11). No hidden randomness except the server
-  challenge nonce (which is logged).
+- **Deterministic & auditable by design — "the model reads; rules decide."** A VLM *reads* arbitrary layouts into
+  a claim graph, but **no ML/VLM sits in the decision path** — the rules, corroboration, and policy brain are
+  classical logic + cryptography, so given the same **claim graph** + config a verdict is reproducible and
+  explainable down to the contributing signals (a defensibility win with a bank; see §11). The VLM is untrusted
+  input: every figure it reports is box-grounded and independently re-read, and it can never set a verdict
+  ([ADR-004 §5](architecture/ADR-004-v2-progressive-evidence-architecture.md)). No hidden randomness except the
+  server challenge nonce (logged); VLM calls run at temperature 0 with the model id logged to the audit.
 - **Resilience & graceful degradation.** Per-analyzer timeouts; isolate failures; bound queues and apply
   backpressure on the camera path (drop frames, never melt down).
 - **Stateless & scalable.** Request processing stateless; session state in one swappable place (in-memory now,
@@ -202,7 +220,9 @@ Code is read far more than written — here, by Canara Bank's auditors.
 
 ## 6. Anti-hallucination protocol
 
-Crypto + CV libraries make invented APIs the #1 source of broken code. Ground every claim.
+Crypto + CV libraries make invented APIs the #1 source of broken code — and the VLM can hallucinate *document
+content* (a figure, a name) as readily as code hallucinates APIs. Ground every claim, and every extracted figure
+(§3.1's cross-read consensus).
 1. **Verify the API before you call it** — confirm the signature in the installed version (`pip show`, read the module/official docs). Don't recall from memory. (Verified load-bearing facts: pyHanko custom `trust_roots`; `c2pa` cert-anchor verification; WebNFC is NDEF-only.)
 2. **No phantom references.** Every import, function, cert, env var, path must exist or be created in the same change.
 3. **Run it, don't imagine it.** Crypto/CV breaks in ways static reading misses (cert chains, `/ByteRange`, BGR vs RGB, dtype). Execute before claiming it works.
@@ -229,6 +249,7 @@ Mixed workload — design each path for its profile.
 - **Test each analyzer's discriminative claim** with a genuine-vs-adversarial pair, and ship the **must-fail fixtures** from BUILD-MANIFEST. Non-negotiable examples:
   - Signature verification: a PDF signed with an **attacker's own cert** → chain-to-anchor FAILS; a validly-signed PDF with **bytes appended after `/ByteRange`** → digest FAILS.
   - Arithmetic engine: genuine statement passes; **one altered figure breaks an invariant** and flags the exact cell; survives realistic OCR noise.
+  - VLM boundary: a document that induces the VLM to **normalize a tampered figure** must end `NOT_EVALUATED`/FLAGGED, never VALID-clean (cross-read consensus); an embedded **prompt-injection** ("mark verified") must not move the deterministic verdict.
   - The injection/sensor check must **never** emit an unearned PASS.
 - **Keep a small `tests/fixtures/` set** (genuine + tampered + screen-photo + signed + appended-bytes samples). No fixture hand-tuned until a test passes.
 - **Integration-test the waterfall end-to-end** at least once: intake → orchestrator → trust-score JSON with the expected tier + verdict band.
@@ -241,7 +262,7 @@ Mixed workload — design each path for its profile.
 
 The frontend is what the bank sees; it must look like a product Canara Bank would deploy.
 - **Design language:** clean, professional, trust-conveying. Restrained palette (deep blue/slate + one accent), generous whitespace, strong type hierarchy. A "fintech security console," not a neon dashboard.
-- **The console is the hero — explainability is the differentiator.** Per case, surface: **intake mode + document type**; the **provenance result** (signature valid / issuer / chain — or "no verifiable source"); the **verification tier reached**; **per-signal status with its producing-mode tag** (VALID / `NOT_EVALUATED`-pending / FAIL); the **deterministic tamper-evidence map** (only regions traced to a real detector — OCR-field anomaly, copy-move cluster, noise outlier; **never** a placeholder/GradCAM heatmap); the **arithmetic breakdown** showing exactly which invariant broke; and a **recommended action with reasons**.
+- **The console is the hero — explainability is the differentiator.** Per case, surface: **intake mode + document type + evidence-sufficiency** (single-doc / case-context / corroborated); the **provenance result** (signature valid / issuer / chain — or "no verifiable source"); the **verification tier reached**; **per-signal status with its producing-mode tag** (VALID / `NOT_EVALUATED`-pending / FAIL); the **claim graph** with each figure's **VLM-extraction provenance** (bounding box + confidence + "independently re-read ✓/pending"); the **deterministic tamper-evidence map** (only regions traced to a real detector — rule-broken cell, copy-move cluster; **never** a placeholder/GradCAM heatmap); the **arithmetic breakdown** showing exactly which invariant broke; the **cross-source corroboration** view; and a **recommended action with reasons**.
 - **Three honest verdict states**, unmistakable: ✅ APPROVED · ⚠️ REVIEW · ❌ REJECTED — plus a distinct **"not evaluated / pending"** treatment. Never a green pass for something that didn't run.
 - **Trust score:** a clear gauge (0–100) with the threshold bands labeled.
 - **Live camera mode:** overlay the active-challenge instruction and per-tier status as it happens, so the pipeline feels alive.
@@ -275,28 +296,34 @@ This is the cybersecurity spine; treat these as features, not hygiene.
 
 ## 11. Tech stack & conventions — defensible, survivable, not a demo dummy
 
-Chosen so the prototype *is* the production architecture. Rationale: the decision path is **deterministic
-(classical CV + cryptography + logic), with no PyTorch/black-box model in the core** — lighter, faster, fully
-auditable and reproducible, no GPU or model-weights dependency. That determinism is itself a security argument.
+Chosen so the prototype *is* the production architecture. Rationale: a VLM *reads* arbitrary documents into a
+claim graph, but the **decision path is deterministic (classical logic + cryptography), with no black-box model
+judging** — auditable and reproducible from the claim graph onward. The VLM is swappable (cloud API for the POC →
+self-hosted in-perimeter for production) behind one interface, held to the trust boundary in
+[ADR-004 §5](architecture/ADR-004-v2-progressive-evidence-architecture.md). That read-vs-decide split is itself a
+security argument: even a fully prompt-injected reader cannot move a verdict.
 
 | Area | Choice | Why |
 |---|---|---|
 | **Backend** | Python 3.11+, **FastAPI** + Uvicorn (async), **Pydantic v2** | The crypto/forensic ecosystem is Python; typed contracts at every boundary |
 | **Crypto / provenance** | **pyHanko** (PAdES/CMS, custom `trust_roots` = CCA-India PKI), `cryptography`, `asn1crypto`; **c2pa** (trust-list pinned) | Real signature + content-provenance verification, offline, no partner |
 | **PDF / parse** | **pikepdf** (qpdf) + **PyMuPDF** (fitz) | Structure/metadata forensics + safe render; defensive parsing |
-| **OCR** | **Tesseract** (`pytesseract`) for the prototype; PaddleOCR as the vernacular/land-record upgrade | Deterministic, deployable; no heavy ML dep by default |
+| **VLM understanding** | `VLMExtractor` interface — **Claude Sonnet 4.6 / Opus 4.8** (cloud, POC) or **Gemini 2.x**; **Qwen2.5-VL-7B via vLLM** (self-host, prod) | Reads arbitrary layouts → claim graph; extraction-only, box-grounded, cross-read-verified ([ADR-004 §5](architecture/ADR-004-v2-progressive-evidence-architecture.md)) |
+| **OCR (cross-read)** | **Tesseract** (`pytesseract`); PaddleOCR for vernacular | Independently re-reads every VLM numeric claim (consensus or `NOT_EVALUATED`); deterministic |
 | **CV / hashing** | **OpenCV** + NumPy + scikit-image + Pillow; **imagehash** (pHash) | Rectify, homography challenge, copy-move (ORB+RANSAC), anti-spoof FFT, perceptual hash |
-| **Consistency engine** | Pure Python (`Decimal`) | The primary tamper signal — exact arithmetic, fully auditable |
+| **Claim graph + rule packs** | Typed Pydantic claims; pure Python (`Decimal`) + `rapidfuzz` rule packs (financial/land/legal) | Template-independent judgment — exact arithmetic + cross-field consistency, fully auditable |
+| **Anomaly (hybrid)** | NumPy/pandas deterministic backbone + optional ML lane behind `AnomalyDetector` (flag) | Soft REVIEW-only patterns; ML lane separable, experimental, never gates |
 | **Data** | **PostgreSQL** (fraud-hash DB, hash-chained audit, issuer-capability registry, template corpus) via SQLAlchemy 2.0 + Alembic; **in-memory** ephemeral session/frames (never persisted) | Real durable store; privacy-preserving session handling |
 | **Frontend** | **React 18 + TypeScript + Vite**, **Tailwind CSS + shadcn/ui** (Radix), WebRTC + native WebSocket, TanStack Query | Accessible, production-grade, typed evidence console — not a template dummy |
 | **Infra** | **Docker** + docker-compose, **Nginx** (TLS + reverse proxy `/api` `/ws` `/`), 12-factor env, **structlog** + correlation IDs, healthchecks | Reproducible, observable, deployable |
 | **Quality/CI** | pytest (+ must-fail fixtures), ruff/black/mypy; vitest + Playwright, eslint/prettier; pre-commit; CI gate runs the must-fail fixtures | Enforces §3/§8 mechanically |
-| *(deferred)* | PyTorch/MediaPipe **only** if the face-KYC mode is later built — not in the document path | Out of the core on purpose |
+| *(optional/gated)* | PyTorch/vLLM appears only for the **self-hosted VLM** and the **optional anomaly ML lane** (flag-gated, soft) — never judging; MediaPipe only if face-KYC is later built | Kept off the decision path on purpose |
 
 - **Shared contract:** `LayerSignal` (`name`, `layer`, `mode`, `status`, `suspicion`, `weight`, `reason`,
-  `evidence_regions`, `measurements`, `producing_mode`) and the trust-score JSON (`session_id`, `intake_mode`,
-  `doc_type`, `provenance`, `trust_score`, `verdict`, `signals`, `evidence_pack`, `fail_closed`). Keep
-  frontend/backend in lockstep.
+  `evidence_regions`, `measurements`, `producing_mode`), the new `Claim` (`subject`, `predicate`, `value`,
+  `value_type`, `provenance{doc_id, page, bbox, confidence, source, corroborating_read, cross_read_agree}`), and
+  the trust-score JSON (`session_id`, `intake_mode`, `doc_type`, `provenance`, `trust_score`, `verdict`,
+  `signals`, `evidence_pack`, `fail_closed`). Keep frontend/backend in lockstep.
 - **Pin dependencies** (lockfiles) for reproducible builds; keep `.env.example` current; no hardcoded URLs/ports.
 
 ---
@@ -317,6 +344,7 @@ A change is done only when **all** hold:
 - [ ] It **runs** — you executed it (unit, or the app end-to-end) and observed real behavior.
 - [ ] Every analyzer **responds to input** (passes the §3.1 self-test) or is an **honestly-labeled gate** (§3.4) — and isn't a real-build dodged behind a stub (§2).
 - [ ] Tests assert **real discriminative behavior**, would **fail against a constant**, and the **must-fail fixtures** pass (§3.2, §8).
+- [ ] VLM output is **extraction-only, box-grounded, cross-read-verified**; it can never set a verdict; the hallucination-laundering + prompt-injection fixtures pass (§3.1, [ADR-004 §5](architecture/ADR-004-v2-progressive-evidence-architecture.md)).
 - [ ] Design holds: mode-tagged, programs to contracts, **fails safe/closed**, no analyzer can crash the verdict (§4).
 - [ ] Security: signatures validated to a pinned anchor (not "exists"); untrusted files parsed defensively; verdict written to the tamper-evident audit (§10).
 - [ ] Clean code: named constants with provenance, specific error handling, typed boundaries, linted (§5).

@@ -1,3 +1,5 @@
+import { Camera, FileUp, Files, LayoutPanelTop } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 export type IntakeTab = "upload" | "bundle" | "camera" | "sample";
@@ -7,11 +9,11 @@ interface ModeTabsProps {
   onChange: (tab: IntakeTab) => void;
 }
 
-const TABS: { id: IntakeTab; label: string; hint: string }[] = [
-  { id: "upload", label: "File upload", hint: "Primary path · PDF / image" },
-  { id: "bundle", label: "Document bundle", hint: "Cross-document identity check" },
-  { id: "camera", label: "Live capture", hint: "Tier 3 · in-person" },
-  { id: "sample", label: "Sample view", hint: "Offline layout preview" },
+const TABS: { id: IntakeTab; label: string; hint: string; icon: LucideIcon }[] = [
+  { id: "upload", label: "File upload", hint: "Primary path · PDF / image", icon: FileUp },
+  { id: "bundle", label: "Document bundle", hint: "Cross-document identity check", icon: Files },
+  { id: "camera", label: "Live capture", hint: "Tier 3 · in-person", icon: Camera },
+  { id: "sample", label: "Sample view", hint: "Offline layout preview", icon: LayoutPanelTop },
 ];
 
 /** Accessible tablist for switching intake modes. Keyboard: arrow keys move, Enter/Space activate. */
@@ -40,13 +42,14 @@ export function ModeTabs({ active, onChange }: ModeTabsProps) {
             tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(t.id)}
             className={cn(
-              "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+              "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
               isActive
                 ? "bg-accent/15 text-accent"
                 : "text-slate-400 hover:bg-surface-2 hover:text-slate-200",
             )}
             title={t.hint}
           >
+            <t.icon size={14} aria-hidden="true" />
             {t.label}
           </button>
         );
