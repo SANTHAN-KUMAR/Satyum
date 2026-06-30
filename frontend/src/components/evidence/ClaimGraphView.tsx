@@ -20,7 +20,7 @@ import { cn } from "@/lib/cn";
 function crossReadIcon(agree: boolean | null) {
   if (agree === true) return { Icon: CheckCircle2, cls: "text-verdict-approved" };
   if (agree === false) return { Icon: XCircle, cls: "text-verdict-rejected" };
-  return { Icon: Clock, cls: "text-slate-500" };
+  return { Icon: Clock, cls: "text-text-tertiary" };
 }
 
 const STATUS_CHIP_CLS: Record<Claim["status"], string> = {
@@ -57,7 +57,7 @@ export function ClaimGraphView({ claims }: ClaimGraphViewProps) {
       icon={GitBranch}
       aside={
         <span className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-text-secondary">
             {claims.length} claim{claims.length !== 1 ? "s" : ""}
           </span>
           {disagreed.length > 0 && (
@@ -70,11 +70,11 @@ export function ClaimGraphView({ claims }: ClaimGraphViewProps) {
       ariaLabel="Extracted claim graph with VLM extraction provenance"
     >
       {claims.length === 0 ? (
-        <p className="text-sm text-slate-400">No claims extracted for this document.</p>
+        <p className="text-sm text-text-secondary">No claims extracted for this document.</p>
       ) : (
         <>
           {/* VLM trust boundary reminder */}
-          <p className="mb-3 text-[11px] leading-relaxed text-slate-500">
+          <p className="mb-3 text-[11px] leading-relaxed text-text-tertiary">
             VLM reads document → canonical claims · every numeric value independently
             re-read by deterministic OCR · disagreement → Pending, never a silent pick
             (ADR-004 §5).
@@ -91,7 +91,7 @@ export function ClaimGraphView({ claims }: ClaimGraphViewProps) {
                     (col) => (
                       <th
                         key={col}
-                        className="pb-2 pr-4 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 last:pr-0"
+                        className="pb-2 pr-4 text-left text-[10px] font-semibold uppercase tracking-wider text-text-tertiary last:pr-0"
                         scope="col"
                       >
                         {col}
@@ -106,30 +106,30 @@ export function ClaimGraphView({ claims }: ClaimGraphViewProps) {
                   const rowCls =
                     claim.status === "DISAGREED"
                       ? "bg-verdict-rejected-soft/20"
-                      : "hover:bg-surface-2/30";
+                      : "hover:bg-surface-muted/30";
                   return (
                     <tr
                       key={`${claim.predicate}-${i}`}
                       className={cn("transition-colors", rowCls)}
                     >
                       <td
-                        className="py-2 pr-4 font-mono text-[11px] text-slate-300"
+                        className="py-2 pr-4 font-mono text-[11px] text-text-secondary"
                         title={claim.predicate}
                       >
                         <span className="block max-w-[18ch] truncate">{claim.predicate}</span>
                       </td>
-                      <td className="tnum py-2 pr-4 font-semibold text-slate-100">
+                      <td className="tnum py-2 pr-4 font-semibold text-text-primary">
                         {claim.value}
                       </td>
-                      <td className="py-2 pr-4 text-slate-500">{claim.value_type}</td>
-                      <td className="tnum py-2 pr-4 text-slate-400">
+                      <td className="py-2 pr-4 text-text-tertiary">{claim.value_type}</td>
+                      <td className="tnum py-2 pr-4 text-text-secondary">
                         {Math.round(claim.provenance.confidence * 100)}%
                       </td>
                       <td className="py-2 pr-4">
                         <span className="flex items-center gap-1">
                           <agr.Icon size={12} className={agr.cls} aria-hidden="true" />
                           <span
-                            className="tnum max-w-[12ch] truncate text-slate-300"
+                            className="tnum max-w-[12ch] truncate text-text-secondary"
                             title={
                               claim.provenance.corroborating_read ??
                               `page ${claim.provenance.page} · ${formatBBox(claim.provenance.bbox)}`

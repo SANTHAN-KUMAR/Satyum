@@ -86,7 +86,7 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
         aside={<ConnectionBadge state={socket.state} />}
         bodyClassName="space-y-4"
       >
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-text-tertiary">
           For wet-ink, contested, or un-sourceable documents. The server issues an unpredictable
           physical challenge and verifies the document's tracked motion — defeating photo-of-screen
           and pre-recorded replay. Frames are processed in memory only and never persisted.
@@ -107,7 +107,7 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
               />
               <ChallengeOverlay challenge={socket.challenge} />
               {camera.state === "requesting" && (
-                <div className="absolute inset-0 flex items-center justify-center bg-canvas/60 text-sm text-slate-300">
+                <div className="absolute inset-0 flex items-center justify-center bg-canvas/60 text-sm text-text-secondary">
                   Waiting for camera permission…
                 </div>
               )}
@@ -142,7 +142,7 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
             </button>
           )}
           {socket.notice && (
-            <span className="text-xs text-slate-400" role="status">
+            <span className="text-xs text-text-tertiary" role="status">
               {socket.notice}
             </span>
           )}

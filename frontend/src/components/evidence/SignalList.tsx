@@ -30,7 +30,7 @@ const STRIPE: Record<Severity, string> = {
   error: "border-l-verdict-rejected",
   high: "border-l-verdict-rejected",
   flag: "border-l-verdict-review",
-  clean: "border-l-verdict-approved/60",
+  clean: "border-l-verdict-approved",
   pending: "border-l-hairline",
 };
 
@@ -57,7 +57,7 @@ export function SignalList({ signals }: SignalListProps) {
       aside={`${signals.length} signal${signals.length === 1 ? "" : "s"}`}
     >
       {ordered.length === 0 ? (
-        <p className="text-sm text-slate-400">No signals reported for this intake.</p>
+        <p className="text-sm text-text-tertiary">No signals reported for this intake.</p>
       ) : (
         <ul className="space-y-2.5">
           {ordered.map((s) => {
@@ -69,15 +69,15 @@ export function SignalList({ signals }: SignalListProps) {
               <li
                 key={s.name}
                 className={cn(
-                  "rounded-lg border border-hairline border-l-2 bg-surface-2/40 px-3.5 py-3",
+                  "rounded-lg border border-hairline border-l-2 bg-surface-muted/30 px-3.5 py-3",
                   STRIPE[sev],
                 )}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-100">{humanName(s.name)}</p>
+                    <p className="text-sm font-medium text-text-primary">{humanName(s.name)}</p>
                     {s.reason && (
-                      <p className="mt-0.5 text-sm leading-relaxed text-slate-300">{s.reason}</p>
+                      <p className="mt-0.5 text-sm leading-relaxed text-text-secondary">{s.reason}</p>
                     )}
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1">
@@ -90,7 +90,7 @@ export function SignalList({ signals }: SignalListProps) {
                             ? "text-verdict-rejected"
                             : sev === "flag"
                               ? "text-verdict-review"
-                              : "text-slate-500",
+                              : "text-text-tertiary",
                         )}
                         title="Suspicion: 0 clean → 1 maximally suspicious"
                       >
@@ -101,7 +101,7 @@ export function SignalList({ signals }: SignalListProps) {
                 </div>
 
                 {/* Demoted technical line — visible (mode-tag invariant, §1) but quiet. */}
-                <p className="mt-2 text-[11px] text-slate-500">
+                <p className="mt-2 text-[11px] text-text-tertiary">
                   {MODE_LABEL[s.producing_mode] ?? s.producing_mode}-mode · layer {s.layer}
                   {s.status === "VALID" && ` · weight ${s.weight.toFixed(2)}`}
                 </p>
@@ -109,7 +109,7 @@ export function SignalList({ signals }: SignalListProps) {
                 {hasDetail &&
                   (flagged ? (
                     // Promote the evidence: a flagged signal shows WHY inline.
-                    <div className="mt-2.5 rounded-lg border border-hairline bg-canvas/40 p-3">
+                    <div className="mt-2.5 rounded-lg border border-hairline bg-surface p-3">
                       <MeasurementBreakdown measurements={s.measurements} />
                     </div>
                   ) : (
@@ -123,7 +123,7 @@ export function SignalList({ signals }: SignalListProps) {
                         />
                         Analysis detail
                       </summary>
-                      <div className="mt-2 rounded-lg border border-hairline bg-canvas/40 p-3">
+                      <div className="mt-2 rounded-lg border border-hairline bg-surface p-3">
                         <MeasurementBreakdown measurements={s.measurements} />
                       </div>
                     </details>

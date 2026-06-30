@@ -16,7 +16,7 @@ export function PendingList({ pending }: PendingListProps) {
   if (pending.length === 0) {
     return (
       <Panel title="Not evaluated (pending)" icon={Clock} aside="0">
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-text-secondary">
           Every applicable check was evaluated — nothing gated for this intake.
         </p>
       </Panel>
@@ -33,11 +33,11 @@ export function PendingList({ pending }: PendingListProps) {
           >
             <div className="flex items-center gap-2">
               <Tag>pending</Tag>
-              <span className="text-sm font-medium text-slate-200">
+              <span className="text-sm font-medium text-text-primary">
                 {p.name.replace(/_/g, " ")}
               </span>
             </div>
-            <p className="text-sm text-slate-400">{p.reason}</p>
+            <p className="text-sm text-text-secondary">{p.reason}</p>
           </li>
         ))}
       </ul>

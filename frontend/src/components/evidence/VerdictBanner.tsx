@@ -39,7 +39,7 @@ export function VerdictBanner({ verdict, failClosed }: VerdictBannerProps) {
         <t.Icon size={26} strokeWidth={2} />
       </span>
       <div className="min-w-0">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
           Document integrity verdict
         </p>
         <p className={cn("text-2xl font-bold leading-tight", t.text)}>{t.label}</p>

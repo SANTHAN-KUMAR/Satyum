@@ -27,7 +27,7 @@ const STATUS_CFG: Record<RuleStatus, StatusCfg> = {
     label: "Pass",
     Icon: CheckCircle2,
     iconCls: "text-verdict-approved",
-    rowCls: "border-hairline bg-surface-2/30",
+    rowCls: "border-hairline bg-surface-muted/30",
     stripeCls: "border-l-verdict-approved/40",
   },
   FAIL: {
@@ -41,13 +41,13 @@ const STATUS_CFG: Record<RuleStatus, StatusCfg> = {
     label: "Unknown",
     Icon: HelpCircle,
     iconCls: "text-verdict-review",
-    rowCls: "border-hairline bg-surface-2/30",
+    rowCls: "border-hairline bg-surface-muted/30",
     stripeCls: "border-l-verdict-review/60",
   },
   NOT_APPLICABLE: {
     label: "N/A",
     Icon: MinusCircle,
-    iconCls: "text-slate-600",
+    iconCls: "text-text-tertiary",
     rowCls: "border-hairline/50 bg-canvas/20 opacity-60",
     stripeCls: "border-l-hairline/40",
   },
@@ -55,7 +55,7 @@ const STATUS_CFG: Record<RuleStatus, StatusCfg> = {
     label: "Pending",
     Icon: Clock,
     iconCls: "text-verdict-pending",
-    rowCls: "border-hairline bg-surface-2/30",
+    rowCls: "border-hairline bg-surface-muted/30",
     stripeCls: "border-l-verdict-pending/40",
   },
 };
@@ -82,16 +82,16 @@ function RuleRow({ rule }: { rule: RuleResult }) {
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold text-slate-200">{rule.description}</p>
+          <p className="text-xs font-semibold text-text-primary">{rule.description}</p>
           {rule.reason && (
-            <p className="mt-0.5 text-xs leading-relaxed text-slate-400">{rule.reason}</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-text-secondary">{rule.reason}</p>
           )}
           {rule.claims_used.length > 0 && (
             <p className="mt-1.5 flex flex-wrap gap-1">
               {rule.claims_used.map((c) => (
                 <span
                   key={c}
-                  className="rounded bg-canvas/60 border border-hairline px-1.5 py-px font-mono text-[10px] text-slate-500"
+                  className="rounded bg-canvas/60 border border-hairline px-1.5 py-px font-mono text-[10px] text-text-tertiary"
                 >
                   {c}
                 </span>
@@ -120,7 +120,7 @@ export function RulePackPanel({ packs }: RulePackPanelProps) {
   if (packs.length === 0) {
     return (
       <Panel title="Rule packs" icon={Shield}>
-        <p className="text-sm text-slate-400">No rule pack results for this document type.</p>
+        <p className="text-sm text-text-secondary">No rule pack results for this document type.</p>
       </Panel>
     );
   }
@@ -136,7 +136,7 @@ export function RulePackPanel({ packs }: RulePackPanelProps) {
       title="Rule packs (deterministic)"
       icon={Shield}
       aside={
-        <span className="flex items-center gap-2 text-[11px] text-slate-500">
+        <span className="flex items-center gap-2 text-[11px] text-text-tertiary">
           <span>{totalRules} rules</span>
           {totalFails > 0 && (
             <span className="rounded-full border border-verdict-rejected/30 bg-verdict-rejected-soft px-2 py-0.5 font-semibold text-verdict-rejected">
@@ -167,7 +167,7 @@ export function RulePackPanel({ packs }: RulePackPanelProps) {
                   "flex items-center gap-1.5 rounded-t-md px-3 py-1.5 text-xs font-semibold transition-colors",
                   isActive
                     ? "border-b-2 border-accent bg-accent/5 text-accent"
-                    : "text-slate-400 hover:text-slate-200",
+                    : "text-text-secondary hover:text-text-primary",
                 )}
               >
                 {DOMAIN_LABEL[pack.domain] ?? pack.domain}
@@ -184,7 +184,7 @@ export function RulePackPanel({ packs }: RulePackPanelProps) {
 
       <div className="space-y-2" role={packs.length > 1 ? "tabpanel" : undefined}>
         {activePack.rules.length === 0 ? (
-          <p className="text-sm text-slate-400">No rules configured for this domain.</p>
+          <p className="text-sm text-text-secondary">No rules configured for this domain.</p>
         ) : (
           activePack.rules.map((rule) => <RuleRow key={rule.rule_id} rule={rule} />)
         )}

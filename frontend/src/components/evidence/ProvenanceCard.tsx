@@ -64,9 +64,9 @@ export function ProvenanceCard({ provenance, tierLabel }: ProvenanceCardProps) {
               {provenance.method || "none"}
             </Tag>
           </div>
-          <p className="mt-1 text-sm text-slate-400">{copy.sub}</p>
+          <p className="mt-1 text-sm text-text-secondary">{copy.sub}</p>
           {provenance.detail && (
-            <p className="mt-2 rounded bg-black/25 px-2 py-1 font-mono text-xs text-slate-300">
+            <p className="mt-2 rounded bg-black/25 px-2 py-1 font-mono text-xs text-text-secondary">
               {provenance.detail}
             </p>
           )}

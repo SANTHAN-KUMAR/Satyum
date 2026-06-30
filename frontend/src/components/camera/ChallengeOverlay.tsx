@@ -70,15 +70,15 @@ export function ChallengeOverlay({ challenge }: ChallengeOverlayProps) {
           <Icon size={26} strokeWidth={2} />
         </span>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-text-tertiary">
             Active challenge
           </p>
-          <p className="text-sm font-semibold text-slate-100">{challenge.instruction}</p>
+          <p className="text-sm font-semibold text-text-primary">{challenge.instruction}</p>
         </div>
         <span
           className={cn(
             "ml-2 rounded px-2 py-0.5 font-mono text-xs",
-            expired ? "bg-verdict-rejected-soft text-verdict-rejected" : "bg-surface-2 text-slate-300",
+            expired ? "bg-verdict-rejected-soft text-verdict-rejected" : "bg-surface-muted text-text-secondary",
           )}
         >
           {expired ? "expired" : `${(remainingMs / 1000).toFixed(1)}s`}

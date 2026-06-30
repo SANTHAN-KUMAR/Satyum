@@ -46,7 +46,11 @@ class PageImage:
     ``png_bytes`` is the rendered raster (PNG); ``width``/``height`` are its pixel dimensions, used to
     convert a normalised ``bbox`` into a pixel crop for the OCR cross-read. ``text_layer`` is the PDF's
     embedded text when present (empty for scans/images) — a free, deterministic signal for script
-    detection and routing that needs no OCR. Immutable: an intake artifact is read-only (CLAUDE.md §5).
+    detection and routing that needs no OCR. ``text_words`` is the PDF's per-word geometry — each
+    ``(bbox, text)`` with ``bbox`` normalised ``[x, y, w, h]`` in ``[0, 1]`` — the *exact* printed
+    content the renderer drew, used as the authoritative independent cross-read on a digital-native PDF
+    (no OCR loss, no dependence on the VLM box being pixel-precise; empty for scans/images, which fall
+    back to the OCR cross-read). Immutable: an intake artifact is read-only (CLAUDE.md §5).
     """
 
     png_bytes: bytes
@@ -54,6 +58,7 @@ class PageImage:
     height: int
     page_index: int = 0
     text_layer: str = ""
+    text_words: tuple[tuple[NormBBox, str], ...] = ()
 
 
 class ExtractedValue(BaseModel):

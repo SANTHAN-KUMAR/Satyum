@@ -11,7 +11,7 @@ interface PrivacyNoteProps {
  */
 export function PrivacyNote({ note }: PrivacyNoteProps) {
   return (
-    <p className="flex items-start gap-2 text-xs text-slate-500 sm:max-w-md sm:text-right">
+    <p className="flex items-start gap-2 text-xs text-text-tertiary sm:max-w-md sm:text-right">
       <ShieldCheck size={14} className="mt-px shrink-0 text-accent/80 sm:order-last" aria-hidden="true" />
       <span>{note}</span>
     </p>

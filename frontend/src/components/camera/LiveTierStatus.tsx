@@ -19,7 +19,7 @@ export function LiveTierStatus({ signals, streaming }: LiveTierStatusProps) {
   return (
     <Panel title="Live signal status" aside={streaming ? "streaming" : "idle"}>
       {signals.length === 0 ? (
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-text-secondary">
           {streaming
             ? "Streaming frames — awaiting the server's per-tier evaluation…"
             : "No live signals yet. Start a session to stream frames to the verification pipeline."}
@@ -29,10 +29,10 @@ export function LiveTierStatus({ signals, streaming }: LiveTierStatusProps) {
           {signals.map((s) => (
             <li key={s.name} className="flex flex-wrap items-center gap-2 py-2.5 first:pt-0 last:pb-0">
               <StatusPill status={s.status} />
-              <span className="text-sm font-medium text-slate-100">{s.name.replace(/_/g, " ")}</span>
+              <span className="text-sm font-medium text-text-primary">{s.name.replace(/_/g, " ")}</span>
               <Tag tone="accent">mode: {MODE_LABEL[s.producing_mode] ?? s.producing_mode}</Tag>
               <Tag>layer {s.layer}</Tag>
-              {s.reason && <span className="w-full pl-1 text-xs text-slate-500">{s.reason}</span>}
+              {s.reason && <span className="w-full pl-1 text-xs text-text-tertiary">{s.reason}</span>}
             </li>
           ))}
         </ul>

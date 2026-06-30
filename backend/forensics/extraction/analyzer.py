@@ -21,8 +21,14 @@ from app.contracts import AnalysisContext, EvidenceRegion, LayerSignal, Mode, Si
 from forensics.extraction.builder import ClaimGraphBuilder
 from forensics.extraction.cross_read import CrossReadEnsemble, default_ensemble
 from forensics.extraction.factory import build_default_extractor
-from forensics.extraction.interface import VLMExtractionError, VLMExtractor, VLMUnavailable
-from forensics.extraction.render import render_page
+from forensics.extraction.interface import (
+    PageImage,
+    RawExtraction,
+    VLMExtractionError,
+    VLMExtractor,
+    VLMUnavailable,
+)
+from forensics.extraction.render import render_pages
 
 logger = logging.getLogger(__name__)
 
@@ -91,29 +97,37 @@ class VLMClaimGraphAnalyzer:
             )
 
         try:
-            page, source_kind = render_page(ctx)
+            pages, source_kind = render_pages(ctx, max_pages=settings.vlm_max_pages)
         except ImportError as exc:  # missing render dep (pymupdf/PIL) → fail-closed
             return LayerSignal.error(
                 self.name, self.layer, self.mode, f"render dependency unavailable: {exc}"
             )
         except Exception as exc:  # noqa: BLE001 — any render failure fails closed, never a pass
             return LayerSignal.error(self.name, self.layer, self.mode, f"render failed: {exc}")
-        if page is None:
+        if not pages:
             return LayerSignal.not_evaluated(self.name, self.layer, self.mode, source_kind)
 
-        try:
-            raw = extractor.extract(page, doc_type_hint=ctx.doc_type)
-        except VLMUnavailable as exc:  # config/credential gate → honest pending
-            return LayerSignal.not_evaluated(self.name, self.layer, self.mode, f"VLM unavailable: {exc}")
-        except VLMExtractionError as exc:  # real fault → fail-closed ERROR
-            return LayerSignal.error(self.name, self.layer, self.mode, f"VLM extraction failed: {exc}")
-        except Exception as exc:  # noqa: BLE001 — never let the reader crash the verdict
-            return LayerSignal.error(self.name, self.layer, self.mode, f"VLM extraction error: {exc!r}")
+        # Extract EVERY page. A statement's invariants (closing balance, net reconciliation) are only
+        # correct over the complete transaction set, so a partial extraction would risk falsely failing a
+        # genuine document — therefore any page that cannot be read fails the whole document closed
+        # (NOT_EVALUATED/ERROR), never a verdict on a partial set (CLAUDE.md §4).
+        extractions: list[tuple[RawExtraction, PageImage]] = []
+        for page in pages:
+            try:
+                raw = extractor.extract(page, doc_type_hint=ctx.doc_type)
+            except VLMUnavailable as exc:  # config/credential/quota gate → honest pending
+                return LayerSignal.not_evaluated(self.name, self.layer, self.mode, f"VLM unavailable: {exc}")
+            except VLMExtractionError as exc:  # real fault → fail-closed ERROR
+                return LayerSignal.error(self.name, self.layer, self.mode, f"VLM extraction failed: {exc}")
+            except Exception as exc:  # noqa: BLE001 — never let the reader crash the verdict
+                return LayerSignal.error(self.name, self.layer, self.mode, f"VLM extraction error: {exc!r}")
+            extractions.append((raw, page))
 
+        raw = extractions[0][0]
         source = f"vlm:{raw.model_id}" if raw.model_id else extractor.name
         builder = ClaimGraphBuilder(self._get_ensemble(), arithmetic_abs_tolerance=self._tolerance())
         doc_id = ctx.file_name or ctx.session_id
-        graph = builder.build(raw, page, doc_id=doc_id, source=source)
+        graph = builder.build_multi(extractions, doc_id=doc_id, source=source)
 
         # Publish for the deterministic layers (4 rule packs, 6 corroboration, 7 decision brain).
         ctx.shared["claim_graph"] = graph
@@ -137,6 +151,7 @@ class VLMClaimGraphAnalyzer:
             "doc_type": graph.doc_type,
             "primary_language": graph.primary_language,
             "source_kind": source_kind,
+            "pages_extracted": len(extractions),
             "claims_total": len(graph.claims),
             "numeric_claims": len(graph.numeric_claims()),
             "cross_read_agreement_rate": agreement,

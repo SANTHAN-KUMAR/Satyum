@@ -4,6 +4,7 @@ import { ApiError } from "@/api/client";
 import { useVerifyBundle } from "@/hooks/useVerifyBundle";
 import { ACCEPT_ATTR, formatBytes, rejectReason } from "@/lib/file";
 import { cn } from "@/lib/cn";
+import { COPY } from "@/lib/copy";
 import { BundleConsole } from "./evidence/BundleConsole";
 import { StateMessage } from "./primitives/StateMessage";
 
@@ -125,18 +126,18 @@ export function BundleIntake() {
         <span
           className={cn(
             "flex h-12 w-12 items-center justify-center rounded-full border transition-colors",
-            isDragging ? "border-accent text-accent" : "border-hairline text-slate-400 group-hover:text-accent",
+            isDragging ? "border-accent text-accent" : "border-hairline text-text-secondary group-hover:border-accent/30 group-hover:text-accent",
           )}
           aria-hidden="true"
         >
           <Files size={22} strokeWidth={1.75} />
         </span>
         <div>
-          <p className="text-sm font-semibold text-slate-100">
-            {isDragging ? "Drop to add to the bundle" : "Add related documents (statement · ID · deed)"}
+          <p className="text-[15px] font-medium text-text-primary">
+            {isDragging ? "Drop to add to the bundle" : COPY.BUNDLE_DROP_TITLE}
           </p>
-          <p className="mt-1 text-xs text-slate-500">
-            {MIN_DOCS}–{MAX_DOCS} documents · cross-checked for one coherent identity · verified server-side
+          <p className="mt-1 text-sm text-text-tertiary">
+            {COPY.BUNDLE_DROP_SUBTITLE} ({MIN_DOCS}–{MAX_DOCS} docs)
           </p>
         </div>
       </div>
@@ -145,7 +146,7 @@ export function BundleIntake() {
       {files.length > 0 && (
         <div className="rounded-lg border border-hairline bg-surface/40">
           <div className="flex items-center justify-between border-b border-hairline px-3 py-2">
-            <span className="text-xs font-medium text-slate-300">
+            <span className="text-xs font-medium text-text-secondary">
               {files.length} document{files.length === 1 ? "" : "s"} in bundle
               {files.length < MIN_DOCS && (
                 <span className="ml-1 text-verdict-review">· add at least {MIN_DOCS - files.length} more</span>
@@ -154,7 +155,7 @@ export function BundleIntake() {
             <button
               type="button"
               onClick={clearAll}
-              className="text-xs text-slate-400 hover:text-slate-200"
+              className="text-xs text-text-secondary hover:text-text-primary"
             >
               Clear all
             </button>
@@ -162,14 +163,14 @@ export function BundleIntake() {
           <ul className="divide-y divide-hairline">
             {files.map((f, i) => (
               <li key={`${f.name}-${f.size}`} className="flex items-center justify-between gap-3 px-3 py-2">
-                <span className="truncate text-sm text-slate-200" title={f.name}>
-                  {f.name} <span className="text-xs text-slate-500">({formatBytes(f.size)})</span>
+                <span className="truncate text-sm text-text-primary" title={f.name}>
+                  {f.name} <span className="text-xs text-text-tertiary">({formatBytes(f.size)})</span>
                 </span>
                 <button
                   type="button"
                   onClick={() => removeAt(i)}
                   aria-label={`Remove ${f.name} from the bundle`}
-                  className="shrink-0 rounded p-1 text-slate-500 hover:text-verdict-rejected"
+                  className="shrink-0 rounded p-1 text-text-tertiary hover:text-verdict-rejected"
                 >
                   <X size={15} aria-hidden="true" />
                 </button>
@@ -188,13 +189,13 @@ export function BundleIntake() {
             "rounded-md px-4 py-2 text-sm font-semibold transition-colors",
             canSubmit
               ? "bg-accent text-canvas hover:bg-accent/90"
-              : "cursor-not-allowed border border-hairline bg-surface-2 text-slate-500",
+              : "cursor-not-allowed border border-hairline bg-surface-muted text-text-tertiary",
           )}
         >
           Verify bundle
         </button>
         {files.length > 0 && files.length < MIN_DOCS && (
-          <span className="text-xs text-slate-500">A cross-document check needs at least {MIN_DOCS} documents.</span>
+          <span className="text-xs text-text-tertiary">A cross-document check needs at least {MIN_DOCS} documents.</span>
         )}
       </div>
 
@@ -210,8 +211,8 @@ export function BundleIntake() {
       {verify.isPending && (
         <StateMessage
           tone="loading"
-          title="Verifying the bundle…"
-          detail="Each document runs the full waterfall, then their identity fields are cross-checked. Processed in memory, never persisted."
+          title={COPY.PROCESSING_TITLE}
+          detail={COPY.PROCESSING_SUBTITLE}
         />
       )}
 
@@ -223,7 +224,7 @@ export function BundleIntake() {
             <>
               <p>{verify.error.message}</p>
               {verify.error instanceof ApiError && verify.error.status && (
-                <p className="mt-1 font-mono text-xs text-slate-500">HTTP {verify.error.status}</p>
+                <p className="mt-1 font-mono text-xs text-text-tertiary">HTTP {verify.error.status}</p>
               )}
             </>
           }

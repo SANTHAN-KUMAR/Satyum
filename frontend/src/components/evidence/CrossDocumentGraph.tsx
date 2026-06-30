@@ -78,7 +78,7 @@ export function CrossDocumentGraph({ cross, documentLabels }: CrossDocumentGraph
         {documentLabels.map((label) => (
           <span
             key={label}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-hairline bg-surface-2 px-2.5 py-1 text-xs text-slate-200"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-hairline bg-surface-muted px-2.5 py-1 text-xs text-text-primary"
             title={label}
           >
             <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
@@ -105,7 +105,7 @@ export function CrossDocumentGraph({ cross, documentLabels }: CrossDocumentGraph
 
       {/* Per-field comparison rows. */}
       {notEvaluated || comparisons.length === 0 ? (
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-text-secondary">
           No identity field is shared by two or more documents, so there is nothing to cross-check.
           The bundle is not corroborated — but it is not penalised for it (fail-open, never a fake pass).
         </p>
@@ -117,7 +117,7 @@ export function CrossDocumentGraph({ cross, documentLabels }: CrossDocumentGraph
             return (
               <li key={c.field} className="rounded-lg border border-hairline bg-canvas/40 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-slate-100">{fieldLabel(c.field)}</span>
+                  <span className="text-sm font-medium text-text-primary">{fieldLabel(c.field)}</span>
                   <span
                     className={cn(
                       "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium",
@@ -132,15 +132,15 @@ export function CrossDocumentGraph({ cross, documentLabels }: CrossDocumentGraph
                   {docs.map(([doc, value]) => (
                     <div
                       key={doc}
-                      className="flex items-baseline justify-between gap-2 rounded-md bg-surface-2/60 px-2 py-1"
+                      className="flex items-baseline justify-between gap-2 rounded-md bg-surface-muted/60 px-2 py-1"
                     >
-                      <span className="truncate text-[11px] text-slate-500" title={doc}>
+                      <span className="truncate text-[11px] text-text-tertiary" title={doc}>
                         {nodeLabel(doc)}
                       </span>
                       <span
                         className={cn(
                           "shrink-0 font-mono text-xs",
-                          c.status === "agree" ? "text-slate-300" : "text-slate-100",
+                          c.status === "agree" ? "text-text-secondary" : "text-text-primary",
                         )}
                       >
                         {value}

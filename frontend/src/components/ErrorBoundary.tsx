@@ -32,10 +32,10 @@ export class ErrorBoundary extends Component<Props, State> {
             className="max-w-md space-y-3 rounded-xl border border-verdict-rejected/40 bg-verdict-rejected-soft p-6 text-center"
           >
             <p className="text-lg font-semibold text-verdict-rejected">Something went wrong</p>
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-text-secondary">
               The console hit an unexpected error and stopped to avoid showing an inconsistent state.
             </p>
-            <pre className="overflow-auto rounded bg-black/30 p-2 text-left text-xs text-slate-500">
+            <pre className="overflow-auto rounded bg-black/30 p-2 text-left text-xs text-text-tertiary">
               {this.state.error.message}
             </pre>
             <button

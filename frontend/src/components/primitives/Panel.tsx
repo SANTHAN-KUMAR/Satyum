@@ -36,10 +36,10 @@ export function Panel({
       {(title || aside) && (
         <header className="flex items-center justify-between gap-3 border-b border-hairline/70 px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
-            {Icon && <Icon size={15} className="shrink-0 text-slate-500" aria-hidden="true" />}
+            {Icon && <Icon size={15} className="shrink-0 text-text-tertiary" aria-hidden="true" />}
             {title && <h2 className="panel-title">{title}</h2>}
           </div>
-          {aside && <div className="shrink-0 text-xs text-slate-400">{aside}</div>}
+          {aside && <div className="shrink-0 text-xs text-text-tertiary">{aside}</div>}
         </header>
       )}
       <div className={cn("p-4", bodyClassName)}>{children}</div>

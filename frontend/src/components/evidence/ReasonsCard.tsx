@@ -15,9 +15,9 @@ export function ReasonsCard({ reasons }: ReasonsCardProps) {
     <Panel title="Why — evidence & reasons" icon={ListChecks} aside={`${reasons.length}`}>
       <ol className="space-y-2">
         {reasons.map((reason, i) => (
-          <li key={`${i}-${reason}`} className="flex gap-2.5 text-sm text-slate-300">
+          <li key={`${i}-${reason}`} className="flex gap-2.5 text-sm text-text-secondary">
             <span
-              className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-hairline bg-surface-2 text-[11px] font-semibold text-slate-400"
+              className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-hairline bg-surface-muted text-[11px] font-semibold text-text-tertiary"
               aria-hidden="true"
             >
               {i + 1}

@@ -20,14 +20,16 @@ import logging
 
 from app.config import Settings
 from forensics.extraction.anthropic_extractor import AnthropicVLMExtractor
+from forensics.extraction.fallback import FallbackExtractor
 from forensics.extraction.gemini_extractor import GeminiVLMExtractor
+from forensics.extraction.groq_extractor import GroqVLMExtractor
 from forensics.extraction.interface import VLMExtractor
 from forensics.extraction.routing import FAMILY_INDIC, LanguageRoutedExtractor
 
 logger = logging.getLogger(__name__)
 
 # Providers whose clients are implemented + verified against their SDKs.
-_IMPLEMENTED = {"anthropic", "gemini"}
+_IMPLEMENTED = {"anthropic", "gemini", "groq"}
 # Recognised but not yet wired (honest gate, not a fake client). See module docstring.
 _GATED = {"sarvam"}
 
@@ -54,8 +56,16 @@ def _make_extractor(
         )
     if provider == "gemini":
         return GeminiVLMExtractor(
-            model=model or "gemini-2.5-pro",
+            model=model or "gemini-2.5-flash",
             api_key=api_key,
+            timeout=settings.vlm_timeout_seconds,
+            handled_scripts=handled_scripts,
+        )
+    if provider == "groq":
+        return GroqVLMExtractor(
+            model=model or "meta-llama/llama-4-scout-17b-16e-instruct",
+            api_key=api_key,
+            max_tokens=settings.vlm_max_tokens,
             timeout=settings.vlm_timeout_seconds,
             handled_scripts=handled_scripts,
         )
@@ -77,15 +87,26 @@ def build_default_extractor(settings: Settings) -> VLMExtractor | None:
     Wraps the default reader in a :class:`LanguageRoutedExtractor` when an Indic specialist is
     configured, so vernacular documents route to it; otherwise returns the default reader directly.
     """
-    default = _make_extractor(
+    primary = _make_extractor(
         provider=settings.vlm_provider,
         model=settings.vlm_model,
         api_key=settings.vlm_api_key,
         settings=settings,
         handled_scripts=frozenset({"latin"}),
     )
-    if default is None:
+    fallback = _make_extractor(
+        provider=settings.vlm_fallback_provider,
+        model=settings.vlm_fallback_model,
+        api_key=settings.vlm_fallback_api_key,
+        settings=settings,
+        handled_scripts=frozenset({"latin"}),
+    )
+    # Compose the default reader with its fallback (ADR-004 §7 resilience). If only the fallback is
+    # configured it simply becomes the default — a configured reader is never wasted.
+    chain = [r for r in (primary, fallback) if r is not None]
+    if not chain:
         return None
+    default: VLMExtractor = chain[0] if len(chain) == 1 else FallbackExtractor(chain)
 
     indic = _make_extractor(
         provider=settings.vlm_indic_provider,

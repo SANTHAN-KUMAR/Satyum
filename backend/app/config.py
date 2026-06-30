@@ -133,6 +133,17 @@ class Settings(BaseSettings):
     vlm_api_key: str = ""  # SATYUM_VLM_API_KEY — the default reader's credential
     vlm_max_tokens: int = 4096
     vlm_timeout_seconds: float = 60.0
+    # A statement's rows span continuation pages; the running-balance chain and net reconciliation are
+    # only correct over the COMPLETE set, so Layer 2 reads every page (ADR-004 §3). Bounded so a
+    # pathological many-page upload cannot exhaust the VLM budget (one extraction call per page).
+    vlm_max_pages: int = 8
+    # Fallback reader (ADR-004 §7 resilience / CLAUDE.md §4 graceful degradation): when the primary
+    # reader is unavailable (quota/auth) or errors on a page, the Layer-2 analyzer transparently retries
+    # with this reader before failing closed. Removes the single-cloud-VLM point of failure. "groq"
+    # (Llama-4 Scout vision) works today; "" → no fallback. Configured via SATYUM_VLM_FALLBACK_*.
+    vlm_fallback_provider: str = ""
+    vlm_fallback_model: str = ""
+    vlm_fallback_api_key: str = ""
     # Indic specialist for vernacular routing (ADR-004 §7; India-first). "gemini" works today; "sarvam"
     # is the sovereign Indic specialist, recognised but client-pending (see extraction/factory.py).
     vlm_indic_provider: str = ""  # "" → no specialist; the default reader handles every script
