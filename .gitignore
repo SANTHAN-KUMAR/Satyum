@@ -66,3 +66,9 @@ Real_life_docs/
 # --- Personal real documents used for local testing — NOT synthetic; keep out of git (PII) ---
 PAN/
 Santhan_bank_statement_forged.pdf
+canara_epassbook_2026.pdf
+
+# --- Local scratch/debug scripts and archives — never project artifacts ---
+satyum-source.zip
+test_ds.py
+test_qwen_groq.py

@@ -38,6 +38,7 @@ from app.config import settings
 from app.contracts import AnalysisContext, BundleTrustScore, Mode, PasswordRequired, TrustScore
 from app.orchestrator import run_verification
 from federation.service import advise_from_context
+from forensics.entities import ExtractedEntities
 from risk.engine import attach_advisory
 from verification.pdf_crypto import is_pdf_encrypted, password_unlocks
 from verification.provenance import issuer_is_sourceable
@@ -88,6 +89,7 @@ async def verify_file(
     claimed_pan: str | None = Form(default=None),    # applicant-typed PAN → cross-checked vs the document
     features_json: str | None = Form(default=None),  # engineered features for analyst-approved rules
     pdf_password: str | None = Form(default=None),   # unlocks an encrypted (password-protected) PDF
+    case_id: str | None = Form(default=None),        # accrue this doc's identity claims into a case
 ) -> TrustScore | PasswordRequired:
     """Verify an uploaded document and return the :class:`TrustScore` (incl. the evidence pack).
 
@@ -207,6 +209,25 @@ async def verify_file(
                 trust = attach_advisory(trust, advisories)
         except Exception as exc:  # noqa: BLE001 — advisory must NEVER break a verdict (fail-open, §4)
             bound.warning("advisory.consult.error", error=repr(exc))
+
+    # --- application-case accrual: contribute this document's extracted identity claims to the case so
+    # the cross-document graph strengthens over time (app/case_store.py). Only the claims + verdict are
+    # stored, never bytes/imagery (§10). Fail-open: case accrual must never break a verdict (§4).
+    case_store = getattr(request.app.state, "case_store", None)
+    if case_id and case_store is not None and case_store.get(case_id) is not None:
+        try:
+            entities = ctx.shared.get("entities")
+            if isinstance(entities, ExtractedEntities):
+                case_store.add_document(
+                    case_id,
+                    label=(trust.doc_type or doc_type or "document"),
+                    entities=entities,
+                    verdict=trust.verdict.value,
+                    now=_iso_now(),
+                )
+                bound.info("case.accrual", case_id=case_id)  # no applicant PII (§10)
+        except Exception as exc:  # noqa: BLE001 — accrual must never break a verdict
+            bound.warning("case.accrual.error", error=repr(exc))
 
     bound.info(
         "verify.file.scored",

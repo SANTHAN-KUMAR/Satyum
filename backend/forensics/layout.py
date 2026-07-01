@@ -82,6 +82,16 @@ STROKE_SCALE_FLOOR = 0.02          # stroke width is already height-normalised (
 SUSPICION_AT_FLAG = 0.45    # suspicion when a word just reaches ROBUST_Z_FLAG on one feature
 SUSPICION_Z_SLOPE = 0.10    # extra suspicion per unit of robust-z above the flag threshold
 
+# Heterogeneous-typography guard. Font-substitution tampering is a FEW outliers against an otherwise
+# uniform body font; a document whose typography is inherently mixed (an ID card with Hindi + English,
+# headers, fine print, multiple sizes — or any multi-section form) has NO single baseline, so a large
+# FRACTION of its words read as "outliers". In that case the z-score model is not discriminative, so we
+# return NOT_EVALUATED rather than a confident "tampered" (CLAUDE.md §3.1/§3.3) — the same self-aware
+# gate the arithmetic engine uses for misparses. A real single-figure edit stays well under the
+# fraction. DEFAULT — needs calibration on a real corpus.
+FONT_HETEROGENEITY_FRACTION = 0.05   # > 5% of words flagged => inherently mixed typography, not a tamper
+FONT_HETEROGENEITY_MIN_WORDS = 40    # only apply the fraction test when there are enough words to trust it
+
 
 @dataclass
 class WordGeom:
@@ -294,6 +304,11 @@ class FontLayoutAnalyzer:
         doc_type = (ctx.doc_type or "").upper()
         if doc_type in _IDENTITY_DOC_TYPES:
             return False  # z-score baselines calibrated for financial statements; not valid for identity docs
+        if ctx.shared.get("born_digital"):
+            # Born-digital PDF: rasterised-glyph geometry is a category error on vector text (a clean
+            # render is uniform, an image-editor paste isn't present). The deterministic PDF font-object
+            # check (forensics/pdf_fonts.py) is the layout-agnostic replacement for this medium (Unit 4).
+            return False
         ocr = ctx.shared.get("ocr")
         return isinstance(ocr, list) and len(ocr) > 0
 
@@ -330,6 +345,24 @@ class FontLayoutAnalyzer:
 
         if not result.evaluated:
             return LayerSignal.not_evaluated(self.name, self.layer, self.mode, result.reason)
+
+        # Heterogeneous-typography guard (§3.1/§3.3): if a large fraction of words flag, the document
+        # has inherently mixed typography (e.g. an ID card or multi-section form), not a localised
+        # font-substitution edit. The z-score model is not discriminative here -> pending, not "tampered".
+        flagged_n, considered = len(result.flagged), result.words_considered
+        frac = flagged_n / considered if considered else 0.0
+        if considered >= FONT_HETEROGENEITY_MIN_WORDS and frac > FONT_HETEROGENEITY_FRACTION:
+            return LayerSignal.not_evaluated(
+                self.name,
+                self.layer,
+                self.mode,
+                f"{flagged_n}/{considered} words ({frac:.0%}) are typographic outliers — the document "
+                "has heterogeneous typography (mixed scripts/fonts, e.g. an identity card or multi-"
+                "section form); font-substitution analysis is not discriminative here, left pending.",
+                words_considered=considered,
+                flagged_count=flagged_n,
+                flagged_fraction=round(frac, 3),
+            )
 
         suspicion = _suspicion_from(result)
         regions = [

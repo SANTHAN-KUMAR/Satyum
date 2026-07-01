@@ -138,12 +138,70 @@ def test_analyzer_not_evaluated_without_ocr():
     assert sig.suspicion is None  # never a fabricated pass
 
 
+def test_defers_to_font_object_forensics_on_born_digital():
+    """KNOWN_ISSUES #3: the pixel Z-score is a category error on vector text — a born-digital PDF routes
+    to the deterministic PDF font-object check (forensics/pdf_fonts.py) instead of this pixel path."""
+    az = FontLayoutAnalyzer()
+    ctx = _ctx(_uniform_line())
+    ctx.shared["born_digital"] = True
+    assert az.applicable(ctx) is False  # defers on born-digital
+    ctx.shared["born_digital"] = False
+    assert az.applicable(ctx) is True   # still runs on scans / images (no text layer)
+
+
 def test_constant_return_would_fail_discrimination():
     az = FontLayoutAnalyzer()
     uniform = az.analyze(_ctx(_uniform_line())).suspicion
     spliced = az.analyze(_ctx(_spliced_line())).suspicion
     # A constant return would make these equal; the real detector separates them.
     assert uniform != spliced
+
+
+# --- heterogeneous-typography guard: an ID card is not a tamper -----------------------------------
+
+def _heterogeneous_doc() -> list[dict]:
+    """Inherently mixed typography (like an identity card): every line mixes word heights and
+    baselines, so a large fraction read as outliers against any single-baseline model."""
+    words = []
+    for ln in range(12):
+        x = 20
+        for i, (h, dy) in enumerate([(30, 0), (52, -18), (28, 0), (46, -14), (31, 0)]):
+            words.append(_word(f"w{ln}{i}", x, 100 + ln * 40 + dy, height=h, line_num=ln, block_num=1))
+            x += 110
+    return words
+
+
+def _large_uniform_with_one_splice() -> list[dict]:
+    """50 uniform words + ONE retyped word — a real single-field font-substitution edit. The flagged
+    fraction stays well under the heterogeneity threshold, so it must still flag (never masked)."""
+    words = []
+    for ln in range(10):
+        x = 20
+        for i in range(5):
+            words.append(_word(f"u{ln}{i}", x, 100 + ln * 40 + (i % 2), height=30,
+                               line_num=ln, block_num=1))
+            x += 110
+    victim = words[22]
+    victim["height"] = 52
+    victim["top"] -= 20  # the one spliced word
+    return words
+
+
+def test_heterogeneous_typography_is_pending_not_tampered():
+    az = FontLayoutAnalyzer()
+    sig = az.analyze(_ctx(_heterogeneous_doc()))
+    assert sig.status == SignalStatus.NOT_EVALUATED, "a mixed-typography doc must not be 'tampered'"
+    assert sig.suspicion is None
+    assert "heterogeneous" in (sig.reason or "").lower()
+
+
+def test_single_splice_in_a_large_uniform_doc_still_flags():
+    az = FontLayoutAnalyzer()
+    sig = az.analyze(_ctx(_large_uniform_with_one_splice()))
+    # the heterogeneity guard must NOT mask a genuine single-figure edit
+    assert sig.status == SignalStatus.VALID
+    assert sig.suspicion is not None and sig.suspicion > 0.0
+    assert sig.evidence_regions
 
 
 # --- honest non-coverage: a fully re-typeset (uniform) forgery is NOT caught here -----------------

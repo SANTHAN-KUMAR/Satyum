@@ -37,6 +37,8 @@ export function OnboardingFlow() {
   const [file, setFile] = useState<File | null>(null);
   const [pulling, setPulling] = useState(false);
   const [source, setSource] = useState<SourceResult | null>(null);
+  const [sourcePassword, setSourcePassword] = useState("");
+  const [sourceNeedsPassword, setSourceNeedsPassword] = useState<{ error?: string } | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [trust, setTrust] = useState<TrustScore | null>(null);
@@ -98,10 +100,22 @@ export function OnboardingFlow() {
     try {
       const res = await pullSource(
         "digilocker",
-        { doc_class: "financial_statement", consent_id: `c-${crypto.randomUUID().slice(0, 8)}`, issuer_hint: "sbi", applicant_ref: pan },
+        {
+          doc_class: "financial_statement",
+          consent_id: `c-${crypto.randomUUID().slice(0, 8)}`,
+          issuer_hint: "sbi",
+          applicant_ref: pan,
+          pdf_password: sourcePassword || undefined,
+        },
         file,
       );
-      setSource(res.source_result);
+      if (res.needs_password) {
+        // Locked govt PDF (e.g. a downloaded Aadhaar). Prompt for the password and decrypt in memory.
+        setSourceNeedsPassword({ error: res.password_error ?? undefined });
+      } else {
+        setSourceNeedsPassword(null);
+        setSource(res.source_result);
+      }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not verify at source.");
     } finally {
@@ -117,8 +131,10 @@ export function OnboardingFlow() {
     setSubmitting(true);
     setError(null);
     try {
+      // Don't force a document type: let the backend classify the upload (the VLM reads its real type,
+      // e.g. BANK_STATEMENT vs PAN_CARD). Forcing "financial_statement" mislabelled non-statements (a
+      // PAN showed as a financial statement) and mis-routed their forensics. Classification is honest.
       const result = await verifyDocument(file, {
-        docType: "financial_statement",
         claimedPan: pan,
         password: pdfPassword || undefined,
       });
@@ -215,7 +231,10 @@ export function OnboardingFlow() {
             )}
             {step === 1 && (
               <SourceStep file={file} pulling={pulling} source={source}
-                onFile={(f) => { setFile(f); setSource(null); }} onPull={runPull} />
+                onFile={(f) => { setFile(f); setSource(null); setSourceNeedsPassword(null); setSourcePassword(""); }}
+                onPull={runPull}
+                needsPassword={sourceNeedsPassword}
+                password={sourcePassword} onPassword={setSourcePassword} />
             )}
             {step === 2 && <Review name={name} pan={pan} entityType={panCheck.entityType} source={source} fileName={file?.name ?? null} />}
             {step === 3 && trust && <Decision trust={trust} onOpenConsole={openConsole} />}
@@ -331,7 +350,7 @@ function Identity({
         We validate the <span className="gradient-text font-medium">PAN format</span> instantly. A live
         Income-Tax existence check is a labelled production gate (it needs a regulator credential) — so
         here we cross-check this PAN against the <span className="gradient-text font-medium">documents you
-        submit</span>, the way an underwriter would.
+          submit</span>, the way an underwriter would.
       </p>
       <div className="mt-7 grid gap-5">
         <Field label="Full name (as on PAN)">
@@ -395,19 +414,34 @@ function AadhaarVerify() {
   };
 
   const verified = result?.signature_status === "VERIFIED";
+
+  // A photo/scan of the physical card has no digital signature to verify (it isn't the offline e-KYC
+  // package UIDAI issues), so we catch that client-side and explain instead of sending it to the backend
+  // to fail as "malformed XML" — an honest, actionable message beats a raw provider rejection.
+  const looksLikeImage = file != null && file.type.startsWith("image/");
+  // A signed e-Aadhaar PDF (e.g. pulled from DigiLocker) is a real, verifiable document — but this
+  // provider only parses the offline e-KYC ZIP/XML package, not a PDF. Route the user to the step that
+  // actually handles signed PDFs instead of letting the upload dead-end here.
+  const looksLikePdf = file != null && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+  const blocked = looksLikeImage || looksLikePdf;
+
   return (
-    <details className="mt-6 rounded-2xl border border-hairline p-4">
-      <summary className="cursor-pointer select-none text-sm font-semibold text-slate-300">
-        Aadhaar — offline e-KYC <span className="font-normal text-slate-500">(optional · real UIDAI signature)</span>
-      </summary>
+    <div className="mt-6 rounded-2xl border border-hairline p-4">
+      <p className="text-sm font-semibold text-slate-300">
+        Aadhaar — offline e-KYC <span className="font-normal text-slate-500">(optional · strengthens corroboration)</span>
+      </p>
       <p className="mt-2 text-xs text-slate-500">
         Generate an Aadhaar Paperless Offline e-KYC at myaadhaar.uidai.gov.in, then upload the ZIP and
-        enter its share code. We verify UIDAI’s digital signature (only a masked reference is used).
+        enter its share code. We verify UIDAI’s digital signature on that package (only a masked
+        reference is used) — <span className="font-medium text-slate-400">a photo of the physical card
+        can’t be cryptographically verified and won’t be accepted here. Have a signed e-Aadhaar
+        PDF instead (e.g. from DigiLocker)? Use “Verify your statement at the source” in the next
+        step — that's the slot that verifies a signed PDF.</span>
       </p>
       <div className="mt-3 grid gap-3">
         <input
           type="file"
-          accept=".zip,.xml,application/zip,text/xml"
+          accept=".zip,.xml,.pdf,application/zip,text/xml,application/pdf,image/*"
           onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }}
           className="block w-full text-sm text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-ink file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white"
         />
@@ -418,10 +452,22 @@ function AadhaarVerify() {
           placeholder="Share code (e.g. ABCD)"
           maxLength={12}
         />
-        <button onClick={verify} disabled={!file || checking} className="btn-ghost w-fit">
+        <button onClick={verify} disabled={!file || checking || blocked} className="btn-ghost w-fit">
           {checking ? "Verifying…" : "Verify Aadhaar"}
         </button>
       </div>
+      {looksLikeImage && (
+        <p className="mt-2 text-xs text-verdict-review">
+          ⚠ This looks like a photo, not an offline e-KYC package — see the instructions above. Get the
+          ZIP from myaadhaar.uidai.gov.in instead.
+        </p>
+      )}
+      {looksLikePdf && (
+        <p className="mt-2 text-xs text-verdict-review">
+          ⚠ This looks like a signed PDF, not an offline e-KYC ZIP/XML package — this section can't verify
+          it. Use “Verify your statement at the source” in the next step instead.
+        </p>
+      )}
       {result && (
         <div
           className={
@@ -446,7 +492,7 @@ function AadhaarVerify() {
         </div>
       )}
       {err && <p className="mt-2 text-xs text-verdict-rejected">⚠ {err}</p>}
-    </details>
+    </div>
   );
 }
 
@@ -477,12 +523,15 @@ function PanResultBanner({ result }: { result: SourceResult }) {
 // --- step 1: source-pull -------------------------------------------------------------------------
 
 function SourceStep({
-  file, pulling, source, onFile, onPull,
+  file, pulling, source, onFile, onPull, needsPassword, password, onPassword,
 }: {
   file: File | null; pulling: boolean; source: SourceResult | null;
   onFile: (f: File | null) => void; onPull: () => void;
+  needsPassword: { error?: string } | null;
+  password: string; onPassword: (v: string) => void;
 }) {
-  const verified = source?.signature_status === "VERIFIED";
+  const status = source?.signature_status;
+  const verified = status === "VERIFIED";
   return (
     <div>
       <h2 className="text-2xl font-semibold text-slate-100">
@@ -490,7 +539,7 @@ function SourceStep({
       </h2>
       <p className="mt-1.5 text-sm text-slate-400">
         The strongest evidence is a cryptographic signature. Add a DigiLocker-issued or bank-signed PDF
-        and we verify the issuer's signature — chained to the CCA-India root. No live pull: we check the
+        and we verify the issuer's signature, chained to the CCA-India root. No live pull: we check the
         signature on the file you provide. No signature? We fall through to forensic integrity checks.
       </p>
 
@@ -501,7 +550,7 @@ function SourceStep({
         {file && <p className="mt-2 text-sm text-slate-300">{file.name}</p>}
       </label>
 
-      {file && (
+      {file && !needsPassword && (
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button onClick={onPull} disabled={pulling} className="btn-primary">
             {pulling ? "Verifying at source…" : "Verify at source"}
@@ -509,15 +558,27 @@ function SourceStep({
           {source && (
             <span className={
               "glass inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-semibold " +
-              (verified ? "" : source.signature_status === "INVALID" ? "text-verdict-rejected" : "text-verdict-review")
+              (verified ? "" : status === "INVALID" ? "text-verdict-rejected" : "text-verdict-review")
             }>
               {verified ? <span className="gradient-text">✓ Verified at source</span>
-                : source.signature_status === "INVALID" ? "✕ Signature invalid"
-                  : "⚠ No signature — we’ll verify by forensics"}
+                : status === "INVALID" ? "✕ Signature invalid (tampered)"
+                  : status === "NOT_VERIFIED" ? "⚠ Signature valid, issuer not confirmed"
+                    : "⚠ No signature — we’ll verify by forensics"}
             </span>
           )}
         </div>
       )}
+
+      {needsPassword && (
+        <PasswordPrompt
+          value={password}
+          onChange={onPassword}
+          error={needsPassword.error}
+          onSubmit={onPull}
+          submitting={pulling}
+        />
+      )}
+
       {verified && source?.issuer && <p className="mt-2 text-sm text-slate-400">Issued by {source.issuer} · CCA-signed</p>}
       <p className="mt-4 text-xs text-slate-500">
         No verifiable source? You can still continue — we’ll verify the document’s internal logic next.

@@ -35,7 +35,7 @@ cd frontend && npm run dev                                                      
 | Drag in | Verdict (observed) | The line to say |
 |---|---|---|
 | `samples/pdfs/genuine_signed.pdf` | ✅ **APPROVED · 99** — `pades_signature: verified, chains to a pinned trust anchor` | "Before we trust a single byte, we verify the PDF's cryptographic signature chains to the CCA-India root. This is what DigiLocker and signed bank e-statements carry." |
-| `samples/pdfs/attacker_self_signed.pdf` | ❌ **REJECTED · 5** — `signature INVALID — chain doesn't reach the anchor` | "Attacker signs with their *own* certificate. 'A signature exists' is not 'a signature is valid' — the chain doesn't reach our pinned root, so we fail **closed**." |
+| `samples/pdfs/attacker_self_signed.pdf` | ⚠️ **REVIEW · issuer unconfirmed** — `signature valid but its chain does not reach a pinned anchor` | "Attacker signs with their own certificate. The signature is intact, but its chain does not reach our pinned root, so we do not source-verify it and we route it to review. We do not call it 'tampered', because a genuine document from an issuer we have not pinned looks identical. We never accuse an unaltered document of fraud." |
 | `samples/pdfs/appended_after_signature.pdf` | ❌ **REJECTED · 5** — `signature INVALID` **and** `pdf_structure: incremental update appended after the signature` | "The shadow attack — bytes edited *after* signing. **Two** independent signals catch it: the digest no longer covers the file, and the structure shows a post-signature update." |
 
 **Say:** *"Notice nothing that didn't run shows green — the signature line on an unsigned doc reads

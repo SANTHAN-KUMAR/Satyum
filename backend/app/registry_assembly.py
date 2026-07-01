@@ -40,6 +40,7 @@ from forensics.metadata import PdfStructureAnalyzer
 
 # Tier 2 — document forensics / OCR / consistency
 from forensics.ocr import DocumentParseAnalyzer
+from forensics.pdf_fonts import PdfFontConsistencyAnalyzer
 from forensics.phash import PhashResubmissionAnalyzer
 from forensics.template import TemplateFingerprintAnalyzer
 from intake.sufficiency import IntakeSufficiencyAnalyzer
@@ -84,6 +85,7 @@ def build_registry(
     registry.register(ArithmeticConsistencyAnalyzer())                     # layer 3 (ANY)
     registry.register(TemplateFingerprintAnalyzer())                       # layer 3, order 31 (FILE)
     registry.register(FontLayoutAnalyzer())                                # layer 3, order 32 (ANY)
+    registry.register(PdfFontConsistencyAnalyzer())                        # layer 3, order 33 (FILE)
     registry.register(PdfStructureAnalyzer())                              # layer 3, order 30 (FILE)
     registry.register(CopyMoveAnalyzer())                                  # layer 3, order 35 (ANY)
     registry.register(PhashResubmissionAnalyzer())                         # layer 3, order 40 (ANY)

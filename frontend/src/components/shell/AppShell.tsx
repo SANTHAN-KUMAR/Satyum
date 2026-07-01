@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { BackendStatus } from "./BackendStatus";
+import { GlobalCopilotDrawer } from "./GlobalCopilotDrawer";
 
 /**
  * The underwriter-facing application shell — a left sidebar (desktop) / top nav (mobile) + content.
@@ -7,6 +8,7 @@ import { BackendStatus } from "./BackendStatus";
  */
 const NAV = [
   { to: "/console", label: "Underwriter console", icon: "▣", sub: "Verify & decide" },
+  { to: "/case", label: "Application case", icon: "▤", sub: "Accumulating documents" },
   { to: "/consortium", label: "Consortium", icon: "◍", sub: "Multi-bank network" },
   { to: "/model", label: "Master model", icon: "✦", sub: "Federated rules" },
 ];
@@ -79,6 +81,8 @@ export function AppShell() {
           <Outlet />
         </div>
       </main>
+
+      <GlobalCopilotDrawer />
     </div>
   );
 }

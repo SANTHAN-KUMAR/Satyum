@@ -97,6 +97,48 @@ def test_aadhaar_failing_checksum_is_flagged_not_trusted():
     assert e.aadhaar_invalid == bad
 
 
+def test_bare_customer_id_is_not_flagged_as_a_forged_aadhaar():
+    """KNOWN_ISSUES #5.2: a 12-digit bank Customer ID with no Aadhaar context must NOT be routed to the
+    UIDAI checksum. It is neither a trusted Aadhaar nor a forgery flag — it is simply not an Aadhaar.
+
+    Discrimination: FAILS against the old code, which ran EVERY 12-digit number through Verhoeff and
+    surfaced a false ``aadhaar_invalid`` on genuine statements.
+    """
+    # A bare 12-digit id printed the way Canara prints a Customer ID — no spacing, no Aadhaar label.
+    e = extract_entities("Customer ID 912345678901\nAccount Statement for June 2026")
+    assert e.aadhaar is None
+    assert e.aadhaar_invalid is None  # the crux: no forgery signal manufactured from a Customer ID
+
+
+def test_spaced_aadhaar_without_a_label_is_still_recognised():
+    """The canonical UIDAI 4-4-4 print grouping is itself Aadhaar context (customer IDs never use it)."""
+    a = _valid_aadhaar()
+    e = extract_entities(f"{a[:4]} {a[4:8]} {a[8:]}")  # spaced, no nearby 'Aadhaar' word
+    assert e.aadhaar == a
+    # A spaced-but-checksum-failed number in Aadhaar format is a genuine forgery tell — still caught.
+    bad = a[:-1] + str((int(a[-1]) + 1) % 10)
+    e_bad = extract_entities(f"{bad[:4]} {bad[4:8]} {bad[8:]}")
+    assert e_bad.aadhaar is None and e_bad.aadhaar_invalid == bad
+
+
+def test_labelled_bare_aadhaar_is_recognised_from_context():
+    """A nearby 'Aadhaar'/'UID' label is context even when the digits are not 4-4-4 spaced."""
+    a = _valid_aadhaar()
+    assert extract_entities(f"Aadhaar No {a}").aadhaar == a
+    assert extract_entities(f"UID: {a}").aadhaar == a
+
+
+def test_customer_id_checksum_fail_does_not_produce_a_scored_signal():
+    """End-to-end of #5.2: a Verhoeff-failing Customer ID leaves the analyzer NOT_EVALUATED, not VALID."""
+    ctx = AnalysisContext(
+        session_id="s", intake_mode=Mode.FILE, file_bytes=b"%PDF-1.4",
+        shared={"ocr": _ocr_words("Customer ID 912345678901")},
+    )
+    sig = EntityExtractionAnalyzer().analyze(ctx)
+    assert sig.status == SignalStatus.NOT_EVALUATED  # no false "Aadhaar forgery" penalty
+    assert ctx.shared["entities"].aadhaar_invalid is None
+
+
 def test_unlabelled_text_yields_no_name_and_no_false_fields():
     e = extract_entities("the quick brown fox jumps over the lazy dog 12345")
     assert e.name is None

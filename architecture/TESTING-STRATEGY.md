@@ -62,8 +62,8 @@ scope, not just the happy path. Every row is a test.
 ### Tier 1 — Signature / provenance (the cyber core; zero tolerance)
 | Attack | Must produce |
 |---|---|
-| Self-signed / attacker-CA cert | **FAIL** — chain to pinned CCA/CA anchor fails |
-| Bytes appended after `/ByteRange` (incremental-update / **shadow attack**) | **FAIL** — coverage/digest mismatch |
+| Self-signed / attacker-CA cert | **MUST NOT source-verify** — chain to a pinned anchor fails, so the document is NOT_EVALUATED as "issuer unconfirmed" and routes to forensic review. It is deliberately NOT labelled "tampered": the bytes are intact, and a genuine document from an unpinned issuer is cryptographically identical (ADR-006). The invariant is that it is never treated as source-verified, never approved. |
+| Bytes appended after `/ByteRange` (incremental-update / **shadow attack**) | **FAIL / tampered** — coverage/digest mismatch; the content was altered after signing |
 | Signature stripped/removed | "no provenance", route to Tier 2 — **never** a pass |
 | Expired / revoked cert (OCSP/CRL) | **FAIL / flag**, fail-closed when revocation unreachable |
 | Valid signature wrapping different content | **FAIL** — content-signature mismatch |

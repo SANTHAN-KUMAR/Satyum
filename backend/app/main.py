@@ -20,12 +20,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.registry_assembly import build_registry
+from app.routes.cases import router as cases_router
 from app.routes.interpret import router as interpret_router
 from app.routes.registry import router as registry_router
 from app.routes.ring import router as ring_router
 from app.routes.rules import router as rules_router
 from app.routes.sources import router as sources_router
 from app.routes.verify import router as verify_router
+from app.case_store import CaseStore
 from app.session import SessionManager
 from federation.graph import EntityGraph
 from federation.registry import FraudRegistry
@@ -101,10 +103,12 @@ def create_app() -> FastAPI:
     app.state.providers = build_provider_registry()  # source-pull adapters (DigiLocker / AA / PAN)
     app.state.fraud_registry = FraudRegistry()    # Layer-3 shared fraud registry (advisory, fail-open)
     app.state.entity_graph = EntityGraph()        # Layer-3 cross-bank ring-detection graph
+    app.state.case_store = CaseStore()            # application-case files (accumulating cross-doc graph)
 
     app.include_router(verify_router)
     app.include_router(sources_router)     # Tier-1 source-of-truth pulls (PAN / Aadhaar / DigiLocker / AA)
     app.include_router(interpret_router)
+    app.include_router(cases_router)       # application-case files (accumulating cross-doc corroboration)
     app.include_router(registry_router)    # cross-bank fraud-hash registry (consortium)
     app.include_router(ring_router)        # cross-bank entity-graph ring evidence
     app.include_router(rules_router)       # FL-discovered rule mining + analyst promotion

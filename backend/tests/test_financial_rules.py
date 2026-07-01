@@ -247,6 +247,49 @@ def test_analyzer_clean_on_genuine_and_flags_tampered():
     assert tampered.measurements["rules_failed"] >= 1
 
 
+def test_aggregate_only_discrepancy_is_review_not_reject_on_claim_graph():
+    """KNOWN_ISSUES #4: rows chain, only a stated total is off -> REVIEW band, never an auto-reject.
+
+    total_debits is stated 250 but the single debit is 200; every running balance still carries forward
+    (F1 passes), so only the aggregate column-total (F3) breaks. That is indistinguishable from an
+    unextracted fee, so it must land in the REVIEW band — not the 0.9 the old code produced. Would FAIL
+    against the old analyzer (which took the rulebook's hard_tamper severity for any fail).
+    """
+    sig = ConsistencyRulesAnalyzer().analyze(_ctx_with(_statement(total_debits="250.00")))
+    assert sig.status == SignalStatus.VALID
+    assert sig.measurements["rules_failed"] >= 1
+    assert sig.measurements["severity"] == "aggregate_only"
+    # score = 100*(1-susp) >= 60 -> REVIEW, never REJECT, on a lone aggregate discrepancy.
+    assert sig.suspicion is not None and sig.suspicion <= 0.40
+
+
+def test_running_balance_edit_stays_strong_on_claim_graph():
+    """Discrimination guard: an edited transaction balance breaks the chain -> full tamper strength."""
+    sig = ConsistencyRulesAnalyzer().analyze(_ctx_with(_statement(row1_balance="1350.00")))
+    assert sig.suspicion is not None and sig.suspicion >= 0.85
+    assert sig.measurements["severity"] == "running_balance_break"
+
+
+def test_incomplete_extraction_abstains_on_claim_graph():
+    """A break coinciding with OCR-flagged uncaptured money must ABSTAIN, not assert tampering.
+
+    Same broken ledger, two completeness states: with the OCR path reporting an uncaptured monetary
+    figure the analyzer is pending (REVIEW); without it, the identical break is a confident tamper.
+    Proves the cross-path completeness signal actually gates the verdict (KNOWN_ISSUES #4).
+    """
+    from forensics.arithmetic import StatementData
+
+    az = ConsistencyRulesAnalyzer()
+    ctx = _ctx_with(_statement(row1_balance="1350.00"))          # a running-balance break
+    ctx.shared["statement"] = StatementData(unstructured_money_tokens=1)  # OCR saw uncaptured money
+    sig = az.analyze(ctx)
+    assert sig.status == SignalStatus.NOT_EVALUATED and sig.suspicion is None
+
+    # Without the incompleteness signal, the SAME break is a confident tamper -> the gate really acts.
+    sig2 = az.analyze(_ctx_with(_statement(row1_balance="1350.00")))
+    assert sig2.status == SignalStatus.VALID and sig2.suspicion is not None and sig2.suspicion >= 0.85
+
+
 def test_analyzer_not_evaluated_when_nothing_assertable():
     """Every critical figure failed the cross-read → no invariant assertable → honest pending."""
     g = ClaimGraph(doc_id="d", doc_type="BANK_STATEMENT")

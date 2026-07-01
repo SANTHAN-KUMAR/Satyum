@@ -30,6 +30,7 @@ from providers.contracts import (
     SourceResult,
 )
 from providers.service import UnknownProviderError, pull_source
+from verification.pdf_crypto import is_pdf_encrypted, password_unlocks
 
 log = structlog.get_logger(__name__)
 
@@ -39,8 +40,12 @@ router = APIRouter()
 class SourcePullResponse(BaseModel):
     """The source-pull result, plus a full TrustScore when a verified document fed the core."""
 
-    source_result: SourceResult
+    source_result: SourceResult | None = None
     trust_score: TrustScore | None = None
+    # Recoverable prompt: the uploaded PDF is password-protected (a locked Aadhaar / e-statement). The
+    # applicant enters the password; we decrypt in memory to verify the signature, preserving it (§10).
+    needs_password: bool = False
+    password_error: str | None = None
 
 
 def _iso_now() -> str:
@@ -70,6 +75,7 @@ async def pull_source_route(
     share_code: str | None = Form(default=None),  # Aadhaar offline e-KYC ZIP password, when applicable
     name: str | None = Form(default=None),         # applicant name (for PAN name-match)
     dob: str | None = Form(default=None),          # applicant DOB DD/MM/YYYY (for PAN verification)
+    pdf_password: str | None = Form(default=None), # unlocks an encrypted (password-protected) PDF
     file: UploadFile | None = File(default=None),  # noqa: B008 — FastAPI declarative default
 ) -> SourcePullResponse:
     """Pull/verify a document from a source provider under explicit consent."""
@@ -84,6 +90,18 @@ async def pull_source_route(
         elif len(payload) > settings.max_file_bytes:
             raise HTTPException(status_code=413, detail=f"payload exceeds {settings.max_file_bytes} bytes")
 
+    # --- password-protected PDF: a locked Aadhaar / e-statement is a recoverable prompt, not a fault.
+    # We decrypt in memory (preserving the signature) to verify it at source — never a 3rd-party unlock
+    # that would re-save the file and destroy the signature (§10, verification/pdf_crypto.py).
+    if payload is not None and is_pdf_encrypted(payload):
+        if not (pdf_password and pdf_password.strip()):
+            return SourcePullResponse(needs_password=True)
+        if not password_unlocks(payload, pdf_password):
+            return SourcePullResponse(
+                needs_password=True,
+                password_error="Incorrect password — please check and try again.",
+            )
+
     consent = ConsentArtifact(
         consent_id=consent_id,
         purpose=purpose,
@@ -93,7 +111,7 @@ async def pull_source_route(
     )
     doc_request = DocRequest(
         doc_class=dc, issuer_hint=issuer_hint, applicant_ref=applicant_ref,
-        share_code=share_code, claimant_name=name, dob=dob,
+        share_code=share_code, claimant_name=name, dob=dob, pdf_password=pdf_password,
     )
 
     registry = request.app.state.providers

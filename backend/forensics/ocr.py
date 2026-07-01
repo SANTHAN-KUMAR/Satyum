@@ -66,6 +66,12 @@ _HEADER_SYNONYMS: dict[str, tuple[str, ...]] = {
 _OPENING_TOKENS = ("opening", "openingbalance", "broughtforward", "b/f", "bf", "openingbal")
 _CLOSING_TOKENS = ("closing", "closingbalance", "carriedforward", "c/f", "cf", "closingbal")
 _TOTAL_TOKENS = ("total", "totals", "grandtotal")
+# One-pass financial-summary terms (KNOWN_ISSUES #4): fees/charges/taxes and interest that affect the
+# closing balance without being itemised as a transaction. Matched as substrings of the normalised
+# (alnum-only, lower-cased) row label. Only captured from a summary row (a money value but NO running
+# balance), so an itemised charge/interest transaction stays in the per-row chain untouched.
+_CHARGE_TOKENS = ("charge", "charges", "fee", "fees", "gst", "servicetax", "penalty", "commission")
+_INTEREST_TOKENS = ("interest", "intcredited", "intcr")
 
 # A money cell: optional currency sign, grouped digits, optional decimals, optional trailing Dr/Cr.
 _MONEY_RE = re.compile(
@@ -168,6 +174,82 @@ def _render_pdf_page(file_bytes: bytes, dpi: int = RENDER_DPI, password: str | N
     finally:
         doc.close()
     return Image.open(io.BytesIO(png_bytes)).convert("RGB")
+
+
+def _text_words_from_page(page, scale: float) -> list[_Word]:
+    """Convert one PyMuPDF page's text-layer words to ``_Word`` at the raster pixel scale (conf 1.0)."""
+    out: list[_Word] = []
+    for x0, y0, x1, y1, word, *_ in page.get_text("words"):
+        text = (word or "").strip()
+        if not text:
+            continue
+        w, h = int((x1 - x0) * scale), int((y1 - y0) * scale)
+        if w <= 0 or h <= 0:
+            continue
+        out.append(_Word(text=text, left=int(x0 * scale), top=int(y0 * scale), width=w, height=h, conf=1.0))
+    return out
+
+
+def text_layer_words_per_page(
+    file_bytes: bytes, password: str | None = None, *, max_pages: int = 8
+) -> list[list[_Word]]:
+    """Text-layer words for EACH page of a born-digital PDF — exact characters + boxes, no OCR (Tier 2).
+
+    A born-digital bank PDF carries the exact printed text and per-word geometry. Reading it directly
+    gives the deterministic parser EXACT input — no OCR misparse, no VLM, no cloud dependency — which is
+    what makes the arithmetic path (a) survive a VLM outage (KNOWN_ISSUES #1/#2), (b) stop false-flagging
+    on OCR noise, and (c) support the multi-page zipper. Coordinates are scaled to the same ``RENDER_DPI``
+    pixel regime the raster/Tesseract path uses, so ``build_statement``'s geometry thresholds apply
+    unchanged. Returns ``[]`` when the input is not a PDF or is encrypted without a working password; a
+    scanned page (no text layer) yields an empty per-page list so the caller can fall back to OCR.
+    """
+    if not is_pdf(file_bytes):
+        return []
+    try:
+        import pymupdf  # PyMuPDF; also importable as ``fitz``
+    except ImportError:
+        return []
+    scale = RENDER_DPI / 72.0  # PDF points -> the raster pixel scale build_statement was tuned on
+    try:
+        doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    except Exception:  # noqa: BLE001 — a malformed PDF yields no text layer, never raises
+        return []
+    pages: list[list[_Word]] = []
+    try:
+        if doc.needs_pass and not (password and doc.authenticate(password)):
+            return []
+        for i in range(min(doc.page_count, max_pages)):
+            pages.append(_text_words_from_page(doc.load_page(i), scale))
+    except Exception:  # noqa: BLE001 — extraction failure -> no text layer, fall back to OCR
+        return []
+    finally:
+        doc.close()
+    return pages
+
+
+def text_layer_words(file_bytes: bytes, password: str | None = None) -> list[_Word] | None:
+    """Page-1 text-layer words (born-digital), or ``None`` if the page has no text layer / not a PDF."""
+    pages = text_layer_words_per_page(file_bytes, password, max_pages=1)
+    return pages[0] if pages and pages[0] else None
+
+
+def page_boundary_pairs(pages: list[list[_Word]]) -> list[tuple[Decimal, Decimal]]:
+    """(closing[i], opening[i+1]) for each consecutive page pair that BOTH print the boundary balance.
+
+    The multi-page zipper (KNOWN_ISSUES #4): a genuine statement carries page n's closing balance forward
+    as page n+1's opening / brought-forward. We reuse ``build_statement`` per page to read each page's
+    stated opening/closing, and emit a boundary pair only where BOTH are present — conservative: a page
+    that prints no explicit opening is simply not checked, never guessed. A deleted page then surfaces as
+    a broken pair in the arithmetic engine (a chain discontinuity, scored as tamper).
+    """
+    stmts = [build_statement(pw) if pw else None for pw in pages]
+    pairs: list[tuple[Decimal, Decimal]] = []
+    for a, b in zip(stmts, stmts[1:], strict=False):
+        if a is None or b is None:
+            continue
+        if a.closing_balance is not None and b.opening_balance is not None:
+            pairs.append((a.closing_balance, b.opening_balance))
+    return pairs
 
 
 def _image_from_context(ctx: AnalysisContext):
@@ -391,6 +473,39 @@ def _cell_money(cell: list[_Word]) -> tuple[Decimal | None, BBox | None]:
     return None, None
 
 
+def _is_currency_like(text: str) -> bool:
+    """True only for a token shaped like a MONEY figure — thousands-grouped and/or a 2-decimal fraction.
+
+    Deliberately excludes bare integer runs (cheque / reference / customer-id numbers) so an
+    out-of-table reference number is never mistaken for an uncaptured amount. Tolerates a leading
+    ₹/Rs marker. Used by the completeness signal below (CLAUDE.md §3.1 — conservative on purpose:
+    over-counting would weaken genuine tamper detection, so we count only unambiguous money shapes).
+    """
+    t = re.sub(r"^(?:₹|rs\.?)\s*", "", text.strip(), flags=re.IGNORECASE)
+    return bool(re.fullmatch(r"\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?", t) or re.fullmatch(r"\d+\.\d{2}", t))
+
+
+def _count_unstructured_money(
+    words: list[_Word], columns: dict[str, _Column], header_bottom: float
+) -> int:
+    """Count currency-formatted body tokens that fell OUTSIDE every detected table column.
+
+    These are monetary figures the parser saw but could not place — the fingerprint of an incomplete
+    extraction (a fee/charge/interest line in a layout region the header columns don't span). The
+    arithmetic engine uses this to ABSTAIN rather than false-reject a genuine statement whose imbalance
+    is really an extraction gap (CLAUDE.md §3.1/§4).
+    """
+    n = 0
+    for w in words:
+        if (w.top + w.height / 2.0) <= header_bottom:
+            continue  # header row or above the table
+        if any(col.contains(w.x_center) for col in columns.values()):
+            continue  # already placed into a column
+        if _is_currency_like(w.text) and parse_money(w.text) is not None:
+            n += 1
+    return n
+
+
 def build_statement(words: list[_Word]) -> StatementData | None:
     """Assemble a :class:`StatementData` from OCR words, or ``None`` if the table is not locatable.
 
@@ -426,6 +541,18 @@ def build_statement(words: list[_Word]) -> StatementData | None:
         if _has(_CLOSING_TOKENS) and balance_val is not None and debit_val is None and credit_val is None:
             stmt.closing_balance = balance_val
             continue
+        # Fees/charges/taxes and interest stated as a SUMMARY row (a money value, no running balance) —
+        # captured before the column-total check so "Total Charges" is a charge, not the debit total.
+        if _has(_CHARGE_TOKENS) and balance_val is None:
+            amt = debit_val if debit_val is not None else credit_val
+            if amt is not None:
+                stmt.stated_charges = (stmt.stated_charges or Decimal(0)) + amt
+                continue
+        if _has(_INTEREST_TOKENS) and balance_val is None:
+            amt = credit_val if credit_val is not None else debit_val
+            if amt is not None:
+                stmt.stated_interest = (stmt.stated_interest or Decimal(0)) + amt
+                continue
         if _has(_TOTAL_TOKENS) and (debit_val is not None or credit_val is not None) and balance_val is None:
             if debit_val is not None:
                 stmt.stated_total_debits = debit_val
@@ -455,6 +582,8 @@ def build_statement(words: list[_Word]) -> StatementData | None:
     # leave opening None rather than guessing — the arithmetic engine will honestly NOT_EVALUATE.
     if not stmt.transactions:
         return None
+    # Completeness signal: monetary figures on the page the parser could not place into the table.
+    stmt.unstructured_money_tokens = _count_unstructured_money(words, columns, header_bottom)
     return stmt
 
 
@@ -564,7 +693,28 @@ class DocumentParseAnalyzer:
         # assessed on OCR noise (which would manufacture false "tampering").
         ctx.shared["ocr"] = ocr_word_dicts(words)
 
-        statement = build_statement(words)
+        # Prefer the PDF TEXT LAYER for the statement (born-digital primary): exact characters + boxes,
+        # no OCR misparse, no VLM/cloud dependency. Fall back to OCR-on-raster for scans/images, or if
+        # the text layer yields no locatable table (ADR-004 Tier 2; KNOWN_ISSUES #1/#2). font/layout
+        # still reads the raster OCR geometry on ctx.shared['ocr'] above — unchanged.
+        statement = None
+        statement_source = "ocr_raster"
+        if ctx.file_bytes is not None:
+            tl_pages = text_layer_words_per_page(ctx.file_bytes, ctx.pdf_password)
+            # A non-empty text layer means the document is born-digital: the pixel typography Z-score is
+            # a category error on vector text there, so it defers to PDF font-object forensics (Unit 4).
+            ctx.shared["born_digital"] = bool(tl_pages and tl_pages[0])
+            if tl_pages and tl_pages[0]:
+                statement = build_statement(tl_pages[0])
+                if statement is not None:
+                    statement_source = "pdf_text_layer"
+                    # Multi-page zipper: carry the per-page boundary balances for the engine to check.
+                    if len(tl_pages) > 1:
+                        statement.page_boundaries = page_boundary_pairs(tl_pages)
+                        measurements["page_boundaries_checked"] = len(statement.page_boundaries)
+        if statement is None:
+            statement = build_statement(words)
+        measurements["statement_source"] = statement_source
 
         # HONEST GATE 2: confident text but no locatable transaction table -> no statement published.
         if statement is None:

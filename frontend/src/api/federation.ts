@@ -35,8 +35,10 @@ export interface SourceResult {
 }
 
 export interface SourcePullResponse {
-  source_result: SourceResult;
+  source_result: SourceResult | null;
   trust_score: unknown | null; // full TrustScore when a verified doc fed the core (typed at use site)
+  needs_password?: boolean;    // the uploaded PDF is password-protected — prompt and resubmit
+  password_error?: string | null;
 }
 
 // --- registry (federation/registry.py) -----------------------------------------------------------
@@ -168,6 +170,7 @@ export function pullSource(
     name?: string; // applicant name (PAN name-match)
     dob?: string; // DD/MM/YYYY (PAN verification)
     share_code?: string; // Aadhaar offline e-KYC ZIP password
+    pdf_password?: string; // unlocks an encrypted (password-protected) PDF
   },
   file?: File,
 ): Promise<SourcePullResponse> {

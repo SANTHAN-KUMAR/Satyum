@@ -75,8 +75,8 @@ is shown as a pass."*
 |---|---|---|
 | `hard/signed_statement_genuine.pdf` | ✅ APPROVED (99) · source-verified | Full PAdES chain validation to a **pinned** anchor, on a document with visible content. |
 | `pdfs/genuine_signed.pdf` | ✅ APPROVED (99) · source-verified | Same, minimal PDF. |
-| `pdfs/attacker_self_signed.pdf` | ❌ REJECTED (5) · tampered | Attacker's own cert → chain doesn't reach the anchor → fail-closed. |
-| `pdfs/appended_after_signature.pdf` | ❌ REJECTED (5) · tampered | Bytes appended after the signed `/ByteRange` (shadow / incremental-update attack). |
+| `pdfs/attacker_self_signed.pdf` | ⚠️ REVIEW · issuer unconfirmed | Attacker's own cert. The signature is intact but its chain does not reach a pinned anchor, so it is NOT source-verified and routes to forensic review. It is deliberately NOT called "tampered": the bytes are unaltered, and a genuine document from an unpinned issuer (a real Aadhaar before its CCA-India root is pinned) is cryptographically identical. We never accuse an intact document of fraud just because its issuer is not pinned (ADR-006). |
+| `pdfs/appended_after_signature.pdf` | ❌ REJECTED (5) · tampered | Bytes appended after the signed `/ByteRange` (shadow / incremental-update attack). The content WAS altered, so this is genuine tampering. |
 | `hard/signed_statement_shadow_attacked.pdf` | ❌ REJECTED (5) · tampered | The shadow attack on a **realistic** signed e-statement. |
 | `pdfs/unsigned.pdf` | ⚠️ REVIEW · forensic-fallback | No signature → falls through to forensics; never an unearned pass. |
 
@@ -196,7 +196,7 @@ python -m pytest -q                         # 282 tests, all green
 python -m pytest tests/test_hard_fixtures.py -v      # the realistic corpus, asserted end-to-end
 python -m pytest tests/test_constant_return_guard.py -v   # proves a constant-return analyzer FAILS
 python -m pytest tests/test_camera_ws.py -v          # the live-capture wire path, end-to-end
-python -m pytest tests/test_signature.py -v          # self-signed + appended-bytes MUST fail
+python -m pytest tests/test_signature.py -v          # appended-bytes MUST be tampered; self-signed MUST NOT verify
 ```
 The litmus the suite enforces (CLAUDE.md §3.2): *if you replaced any analyzer with `return <constant>`,
 its test would fail* — because a constant can't pass the genuine artifact **and** flag the forged one.
@@ -241,8 +241,8 @@ python samples/generate.py
 | `hard/statement_genuine.png` | File upload | ✅ APPROVED |
 | `hard/statement_tampered.png` | File upload | ❌ REJECTED · arithmetic |
 | `pdfs/genuine_signed.pdf` | File upload | ✅ APPROVED · source-verified |
-| `pdfs/attacker_self_signed.pdf` | File upload | ❌ REJECTED · tampered |
-| `pdfs/appended_after_signature.pdf` | File upload | ❌ REJECTED · tampered |
+| `pdfs/attacker_self_signed.pdf` | File upload | ⚠️ REVIEW · issuer unconfirmed (intact signature, chain not pinned; not "tampered") |
+| `pdfs/appended_after_signature.pdf` | File upload | ❌ REJECTED · tampered (content altered after signing) |
 | `pdfs/unsigned.pdf` | File upload | ⚠️ REVIEW |
 | `statements/genuine_statement.png` | File upload | ✅ APPROVED |
 | `statements/tampered_statement.png` | File upload | ❌ REJECTED |

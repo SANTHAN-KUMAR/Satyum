@@ -194,9 +194,14 @@ class Settings(BaseSettings):
     # reader is unavailable (quota/auth) or errors on a page, the Layer-2 analyzer transparently retries
     # with this reader before failing closed. Removes the single-cloud-VLM point of failure. "groq"
     # (Llama-4 Scout vision) works today; "" → no fallback. Configured via SATYUM_VLM_FALLBACK_*.
+    # NOTE: ALL `vlm_api_key` fields support comma-separated strings for automatic multi-key failover.
     vlm_fallback_provider: str = ""
     vlm_fallback_model: str = ""
     vlm_fallback_api_key: str = ""
+    # Second fallback reader (Tertiary lane): when both primary and fallback 1 are exhausted.
+    vlm_fallback2_provider: str = ""
+    vlm_fallback2_model: str = ""
+    vlm_fallback2_api_key: str = ""
     # Indic specialist for vernacular routing (ADR-004 §7; India-first). "gemini" works today; "sarvam"
     # is the sovereign Indic specialist, recognised but client-pending (see extraction/factory.py).
     vlm_indic_provider: str = ""  # "" → no specialist; the default reader handles every script

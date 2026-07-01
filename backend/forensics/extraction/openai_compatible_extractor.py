@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from typing import Any
 
 from forensics.extraction.interface import (
     PageImage,
@@ -68,6 +69,7 @@ class OpenAICompatibleVLMExtractor(VLMExtractor):
         max_tokens: int = 8192,
         require_key: bool = True,
         handled_scripts: frozenset[str] = frozenset({"latin"}),
+        use_json_response_format: bool = True,
     ) -> None:
         self._base_url = (base_url or "").rstrip("/")
         self.model = model
@@ -79,6 +81,11 @@ class OpenAICompatibleVLMExtractor(VLMExtractor):
         # Local backends (Ollama) need no key; hosted ones do. ``require_key=False`` lets a keyless
         # local endpoint be ``available`` so the analyzer actually calls it instead of gating.
         self._require_key = require_key
+        # Whether to send ``response_format={"type": "json_object"}``. Some vision endpoints reject
+        # strict JSON mode with an image attached (HTTP 400 — see KNOWN_ISSUES #1); we default it ON
+        # (most hosts honour it) but self-heal a 400 by retrying without it, and the prompt+parser
+        # guarantee a bare JSON object regardless. Configurable so a known-incompatible host opts out.
+        self._use_json_response_format = use_json_response_format
         self._handled_scripts = handled_scripts
         self._prompt_hash = prompt_fingerprint(f"{self._label}:{model}")
 
@@ -125,7 +132,7 @@ class OpenAICompatibleVLMExtractor(VLMExtractor):
         import httpx
 
         b64 = base64.b64encode(page.png_bytes).decode("ascii")
-        payload = {
+        base_payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -142,21 +149,34 @@ class OpenAICompatibleVLMExtractor(VLMExtractor):
             ],
             "temperature": self._temperature,
             "max_tokens": self._max_tokens,
-            "response_format": {"type": "json_object"},
         }
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        try:
-            response = httpx.post(
-                f"{self._base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=self._timeout,
+        def _post(json_mode: bool) -> httpx.Response:
+            payload = dict(base_payload)
+            if json_mode:
+                payload["response_format"] = {"type": "json_object"}
+            try:
+                return httpx.post(
+                    f"{self._base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=self._timeout,
+                )
+            except httpx.HTTPError as exc:  # network/timeout ⇒ fail-closed ERROR upstream
+                raise VLMExtractionError(f"{self.name}: transport error: {type(exc).__name__}") from exc
+
+        response = _post(self._use_json_response_format)
+        # Self-heal the documented JSON-mode rejection (KNOWN_ISSUES #1): a vision endpoint that 400s on
+        # strict JSON mode with an image attached. Retry once WITHOUT it before failing — the prompt
+        # already requests a bare JSON object and the parser fence-strips + validates it.
+        if response.status_code == 400 and self._use_json_response_format:
+            logger.warning(
+                "extraction: %s rejected strict JSON mode (HTTP 400); retrying without it", self.name
             )
-        except httpx.HTTPError as exc:  # network/timeout ⇒ fail-closed ERROR upstream
-            raise VLMExtractionError(f"{self.name}: transport error: {type(exc).__name__}") from exc
+            response = _post(False)
 
         if response.status_code in (401, 403):  # bad/missing key ⇒ unconfigured (gate, not fault)
             raise VLMUnavailable(f"{self.name}: authentication failed (HTTP {response.status_code})")

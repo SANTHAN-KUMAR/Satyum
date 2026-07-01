@@ -67,6 +67,9 @@ interface VerifyOptions {
   /** Password for an encrypted (password-protected) PDF. The backend decrypts it in memory so the
    *  original signed bytes are never re-saved, preserving the signature. */
   password?: string;
+  /** Accrue this document's extracted identity claims into an application case, strengthening the
+   *  cross-document corroboration graph. */
+  caseId?: string;
   /** Lets a caller (and TanStack Query) cancel an in-flight upload. */
   signal?: AbortSignal;
 }
@@ -99,16 +102,24 @@ export async function verifyDocument(file: File, opts: VerifyOptions = {}): Prom
   if (opts.features) form.append("features_json", JSON.stringify(opts.features));
   if (opts.claimedPan) form.append("claimed_pan", opts.claimedPan);
   if (opts.password) form.append("pdf_password", opts.password);
+  if (opts.caseId) form.append("case_id", opts.caseId);
 
   let res: Response;
   try {
+    // 180-second client-side timeout so the UI doesn't hang forever if the backend VLM API hangs
+    const fetchSignal = opts.signal || AbortSignal.timeout(180000);
     res = await fetch(apiUrl(ENDPOINTS.verify), {
       method: "POST",
       body: form,
       headers: { Accept: "application/json" },
-      signal: opts.signal,
+      signal: fetchSignal,
     });
   } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "TimeoutError") {
+      throw new ApiError(
+        "Verification timed out. The backend AI provider (Cloudflare/Groq) might be rate-limited or unresponsive. Please check the backend terminal."
+      );
+    }
     if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
     // No HTTP response at all → the backend is unreachable. Say so plainly.
     throw new ApiError(
@@ -168,13 +179,20 @@ export async function verifyBundle(
 
   let res: Response;
   try {
+    // 180-second client-side timeout so the UI doesn't hang forever if the backend VLM API hangs
+    const fetchSignal = opts.signal || AbortSignal.timeout(180000);
     res = await fetch(apiUrl(ENDPOINTS.verifyBundle), {
       method: "POST",
       body: form,
       headers: { Accept: "application/json" },
-      signal: opts.signal,
+      signal: fetchSignal,
     });
   } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "TimeoutError") {
+      throw new ApiError(
+        "Verification timed out. The backend AI provider (Cloudflare/Groq) might be rate-limited or unresponsive. Please check the backend terminal."
+      );
+    }
     if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
     throw new ApiError(
       "Could not reach the verification service. Confirm the backend is running and reachable.",

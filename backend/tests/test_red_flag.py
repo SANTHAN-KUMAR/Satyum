@@ -68,6 +68,28 @@ def test_detect_issuer_names_and_keys():
     assert detect_issuer("branch code AXIS / 0042") == "axis"
 
 
+def test_detect_issuer_masthead_wins_over_an_incidental_transaction_line():
+    """KNOWN_ISSUES #5.3: a genuine Canara statement with an HDFC UPI line is Canara, not HDFC.
+
+    The masthead issuer is printed at the top; a competitor name only appears deep in a transaction
+    row. The earliest-appearing name must win. FAILS against the old first-in-registry-order logic
+    (which returned 'hdfc' regardless of where in the document it appeared).
+    """
+    statement = (
+        "CANARA BANK — Account Statement\n"
+        "Branch: MG Road  Period: 01-06-2026 to 30-06-2026\n"
+        "01-06-2026  UPI/HDFC BANK/9876543210/Rent   -15000.00\n"
+        "05-06-2026  NEFT/ICICI BANK/salary          +80000.00\n"
+    )
+    assert detect_issuer(statement) == "canara"
+    # And the reverse: an HDFC statement mentioning Canara lower down stays HDFC.
+    reversed_stmt = (
+        "HDFC BANK Ltd — e-Statement\n"
+        "10-06-2026  IMPS/CANARA BANK/transfer  -2000.00\n"
+    )
+    assert detect_issuer(reversed_stmt) == "hdfc"
+
+
 # --- extract_issuer_from_document: real PDFs ------------------------------------------------------
 
 

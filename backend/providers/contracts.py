@@ -69,6 +69,7 @@ class DocRequest(BaseModel):
     share_code: str | None = None         # Aadhaar offline e-KYC ZIP share-code (password), when applicable
     claimant_name: str | None = None      # applicant name as on the document (for PAN name-match)
     dob: str | None = None                # applicant date of birth, DD/MM/YYYY (for PAN verification)
+    pdf_password: str | None = None       # unlocks an encrypted PDF in memory to verify its signature
 
 
 class ConsentArtifact(BaseModel):
