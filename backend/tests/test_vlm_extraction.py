@@ -481,3 +481,106 @@ def test_analyzer_publishes_graph_with_audit_provenance():
     assert signal.measurements["prompt_hash"] == "deadbeef"
     assert signal.measurements["cross_read_agreement_rate"] == 1.0
     assert "tesseract-line" in signal.measurements["cross_read_readers"]
+
+
+# =================================================================================================
+# 8. JSON-mode resilience — the KNOWN_ISSUES #1 cascade root cause
+#
+# A vision endpoint that hard-400s on strict JSON mode (Groq's Llama-4-Scout) must NOT crash the
+# extraction: the request either omits ``response_format`` for a known-incompatible backend, or
+# self-heals by retrying once without it. Both readers still return a validated transcription. Every
+# test below FAILS against the old code, which always sent ``response_format`` and never retried.
+# =================================================================================================
+
+_MINIMAL_JSON = '{"doc_type":"BANK_STATEMENT","fields":[]}'
+
+
+def _groq_fake_client(create_fn):
+    return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_fn)))
+
+
+def _groq_ok_response(text: str = _MINIMAL_JSON):
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
+
+
+def test_groq_omits_response_format_when_json_mode_disabled():
+    from forensics.extraction.groq_extractor import GroqVLMExtractor
+
+    ex = GroqVLMExtractor(model="m", api_key="k", use_json_response_format=False)
+    calls: list[dict] = []
+    ex._client = _groq_fake_client(lambda **kw: (calls.append(kw), _groq_ok_response())[1])
+
+    out = ex.extract(PageImage(png_bytes=b"\x89PNG", width=10, height=10))
+    assert out.doc_type == "BANK_STATEMENT"
+    assert len(calls) == 1
+    assert "response_format" not in calls[0]  # never sent to the incompatible backend
+
+
+def test_groq_self_heals_a_json_mode_400_by_retrying_without_it():
+    """The must-fix: a BadRequestError on the JSON-mode call retries WITHOUT it and succeeds."""
+    import httpx
+    from groq import BadRequestError
+
+    from forensics.extraction.groq_extractor import GroqVLMExtractor
+
+    ex = GroqVLMExtractor(model="m", api_key="k", use_json_response_format=True)
+    calls: list[dict] = []
+    resp = httpx.Response(400, request=httpx.Request("POST", "http://groq/x"))
+
+    def create(**kw):
+        calls.append(kw)
+        if len(calls) == 1:  # the JSON-mode attempt is rejected exactly as Groq's vision API does
+            raise BadRequestError("json_object unsupported with images", response=resp, body=None)
+        return _groq_ok_response()
+
+    ex._client = _groq_fake_client(create)
+    out = ex.extract(PageImage(png_bytes=b"\x89PNG", width=10, height=10))
+
+    assert out.doc_type == "BANK_STATEMENT"
+    assert len(calls) == 2
+    assert "response_format" in calls[0] and "response_format" not in calls[1]
+
+
+def test_groq_400_that_is_not_json_mode_still_fails_closed():
+    """A 400 when JSON mode was already OFF is a real fault — must fail closed, never a silent pass."""
+    import httpx
+    from groq import BadRequestError
+
+    from forensics.extraction.groq_extractor import GroqVLMExtractor
+    from forensics.extraction.interface import VLMExtractionError
+
+    ex = GroqVLMExtractor(model="m", api_key="k", use_json_response_format=False)
+    resp = httpx.Response(400, request=httpx.Request("POST", "http://groq/x"))
+
+    def create(**kw):
+        raise BadRequestError("bad image", response=resp, body=None)
+
+    ex._client = _groq_fake_client(create)
+    with pytest.raises(VLMExtractionError):
+        ex.extract(PageImage(png_bytes=b"\x89PNG", width=10, height=10))
+
+
+def test_openai_compatible_self_heals_a_json_mode_400(monkeypatch):
+    import httpx
+
+    from forensics.extraction.openai_compatible_extractor import OpenAICompatibleVLMExtractor
+
+    ex = OpenAICompatibleVLMExtractor(base_url="http://h/v1", model="m", api_key="k")
+    calls: list = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):  # noqa: A002 — mirrors httpx.post kwarg
+        calls.append(json or {})
+        if len(calls) == 1:
+            return httpx.Response(400, request=httpx.Request("POST", url))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": _MINIMAL_JSON}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    out = ex.extract(PageImage(png_bytes=b"\x89PNG", width=10, height=10))
+
+    assert out.doc_type == "BANK_STATEMENT"
+    assert len(calls) == 2
+    assert "response_format" in calls[0] and "response_format" not in calls[1]

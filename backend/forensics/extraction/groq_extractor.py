@@ -64,6 +64,7 @@ class GroqVLMExtractor(VLMExtractor):
         timeout: float = 60.0,
         max_tokens: int = 8192,
         handled_scripts: frozenset[str] = frozenset({"latin"}),
+        use_json_response_format: bool = True,
     ) -> None:
         self.model = model
         self._api_key = (api_key or "").strip()
@@ -71,6 +72,13 @@ class GroqVLMExtractor(VLMExtractor):
         self._timeout = timeout
         self._max_tokens = max_tokens
         self._handled_scripts = handled_scripts
+        # Whether to send ``response_format={"type": "json_object"}``. Some vision endpoints (notably
+        # Groq's Llama-4-Scout) reject strict JSON mode *when an image is present* with a hard 400 — the
+        # documented failure that used to crash the whole extraction and cascade to a mis-typed document
+        # (KNOWN_ISSUES #1). We default it OFF for this backend in the factory; the prompt already asks
+        # for a bare JSON object and ``parse_response_text`` fence-strips + validates the result, so the
+        # trust boundary is unchanged whether or not the server enforces JSON mode.
+        self._use_json_response_format = use_json_response_format
         self._prompt_hash = prompt_fingerprint(model)
         self._client: Any = None
 
@@ -133,6 +141,11 @@ class GroqVLMExtractor(VLMExtractor):
         except ImportError as exc:
             raise VLMUnavailable(f"{self.name}: groq SDK not installed") from exc
 
+        try:  # optional 400-specific class so we can self-heal a JSON-mode rejection (see below)
+            from groq import BadRequestError
+        except ImportError:  # pragma: no cover — older SDK without the subclass
+            BadRequestError = None  # type: ignore[assignment,misc]
+
         client = self._ensure_client()
         b64 = base64.b64encode(page.png_bytes).decode("ascii")
         messages = [
@@ -148,14 +161,37 @@ class GroqVLMExtractor(VLMExtractor):
                 ],
             },
         ]
+
+        def _create(json_mode: bool) -> Any:
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self._temperature,
+                "max_tokens": self._max_tokens,
+            }
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            return client.chat.completions.create(**kwargs)
+
         try:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-                response_format={"type": "json_object"},
-            )
+            try:
+                response = _create(self._use_json_response_format)
+            except Exception as exc:  # noqa: BLE001 — narrow to a JSON-mode 400 below, else re-raise
+                # Self-heal the documented failure (KNOWN_ISSUES #1): a vision endpoint that rejects
+                # strict JSON mode with a 400 while an image is attached. Retry once WITHOUT json mode
+                # (the prompt already requests a bare JSON object and the parser fence-strips it). Any
+                # other error — auth, rate limit, real server fault — propagates to the handlers below.
+                is_json_mode_400 = (
+                    self._use_json_response_format
+                    and BadRequestError is not None
+                    and isinstance(exc, BadRequestError)
+                )
+                if not is_json_mode_400:
+                    raise
+                logger.warning(
+                    "extraction: %s rejected strict JSON mode (HTTP 400); retrying without it", self.name
+                )
+                response = _create(False)
         except (AuthenticationError, PermissionDeniedError) as exc:  # bad/expired key ⇒ unconfigured
             raise VLMUnavailable(f"{self.name}: authentication failed") from exc
         except RateLimitError as exc:  # quota/rate ⇒ availability gate, not a processing fault

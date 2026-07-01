@@ -65,3 +65,35 @@ export function RingGraph({ ring }: { ring: RingEvidence }) {
     </figure>
   );
 }
+
+/**
+ * A muted, non-data illustration of the ring topology (generic 5-node placeholder), shown before any
+ * ring has actually been detected. Its only job is discoverability — so the "what does a detected ring
+ * look like" graph is visible immediately instead of appearing only after 3+ manual submissions. It
+ * renders no real measurements and is clearly labelled illustrative — not a result (CLAUDE.md §9).
+ */
+export function RingGraphGhost() {
+  const size = 360;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = 128;
+  const n = 5;
+  const points = Array.from({ length: n }, (_, i) => {
+    const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
+    return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+  });
+
+  return (
+    <figure className="flex flex-col items-center opacity-40" aria-hidden="true">
+      <svg viewBox={`0 0 ${size} ${size}`} className="h-auto w-full max-w-sm">
+        {points.map((p, i) => (
+          <line key={`l-${i}`} x1={cx} y1={cy} x2={p.x} y2={p.y} stroke="#A1A1AA" strokeWidth={2} strokeDasharray="4 4" />
+        ))}
+        <circle cx={cx} cy={cy} r={30} fill="none" stroke="#A1A1AA" strokeWidth={2} strokeDasharray="4 4" />
+        {points.map((p, i) => (
+          <circle key={`n-${i}`} cx={p.x} cy={p.y} r={20} fill="#F5F5F6" stroke="#A1A1AA" strokeWidth={1.5} />
+        ))}
+      </svg>
+    </figure>
+  );
+}

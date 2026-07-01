@@ -72,19 +72,32 @@ def issuer_is_sourceable(issuer_key: str | None) -> bool:
 
 
 def detect_issuer(text: str) -> str | None:
-    """Return the capability key of the first recognised issuer in ``text``, or ``None``.
+    """Return the capability key of the MOST PROMINENT issuer in ``text`` (the masthead), or ``None``.
 
-    Specific multi-word names win over short keys; short keys match only as whole words. Pure string
+    Prominence is by position: the issuing bank's name sits in the header at the *top* of the document,
+    whereas an incidental competitor name ("UPI / HDFC BANK / …") appears far down in a transaction row.
+    We therefore return the issuer whose name appears EARLIEST, not whichever registry key we happen to
+    check first — otherwise a genuine Canara statement carrying an HDFC UPI line is mislabelled HDFC
+    (KNOWN_ISSUES #5.3). Specific multi-word names win ties over short whole-word keys. Pure string
     logic — deterministic and directly unit-tested.
     """
     t = re.sub(r"\s+", " ", text.lower())
+    best_key: str | None = None
+    best_pos = len(t) + 1
+    best_specific = False  # a multi-word masthead name is more trustworthy than a bare short key
+    # Specific multi-word names first (e.g. "canara bank").
     for pattern, key in _ISSUER_PATTERNS.items():
-        if pattern in t:
-            return key
+        pos = t.find(pattern)
+        if pos == -1:
+            continue
+        if pos < best_pos or (pos == best_pos and not best_specific):
+            best_key, best_pos, best_specific = key, pos, True
+    # Short keys matched only as whole words (e.g. "axis") — never break a tie away from a specific name.
     for key in SOURCE_CAPABILITY:
-        if re.search(rf"\b{re.escape(key)}\b", t):
-            return key
-    return None
+        m = re.search(rf"\b{re.escape(key)}\b", t)
+        if m and m.start() < best_pos:
+            best_key, best_pos, best_specific = key, m.start(), False
+    return best_key
 
 
 def _is_pdf(data: bytes) -> bool:

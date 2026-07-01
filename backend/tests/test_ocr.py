@@ -28,13 +28,20 @@ import pytest
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from app.contracts import AnalysisContext, Mode, SignalStatus
-from forensics.arithmetic import ArithmeticConsistencyAnalyzer
+from forensics.arithmetic import ArithmeticConsistencyAnalyzer, check_consistency
 from forensics.ocr import (
     DocumentParseAnalyzer,
+    _Column,
+    _count_unstructured_money,
+    _is_currency_like,
     _ocr_words,
+    _Word,
     build_statement,
     is_pdf,
+    page_boundary_pairs,
     parse_money,
+    text_layer_words,
+    text_layer_words_per_page,
 )
 
 # --- Fixture generation: a real, monospaced bank-statement table -------------------------------
@@ -153,6 +160,217 @@ def test_genuine_statement_parses_correct_numbers():
     assert credits == [Decimal("5000.00"), None, Decimal("1000.00")]
     # every parsed balance carries a locatable evidence box for the underwriter
     assert all(t.balance_bbox is not None for t in stmt.transactions)
+    # a clean statement whose figures all land in the table must NOT be flagged incomplete — otherwise
+    # the completeness abstain would false-pend a genuine document (the exact failure we must avoid).
+    assert stmt.unstructured_money_tokens == 0
+
+
+# --- Completeness signal: the fingerprint of an incomplete extraction ---------------------------
+# A currency-formatted figure the parser could not place into the table means the ledger is
+# incomplete, so a downstream imbalance may be an extraction gap (a hidden fee/charge), not fraud.
+# These prove the signal is discriminative and conservative (reference numbers never trigger it).
+
+
+@pytest.mark.parametrize("token,expected", [
+    ("1,234.56", True),      # thousands-grouped with a 2-decimal fraction
+    ("12,345", True),        # thousands-grouped
+    ("2,00,000.00", True),   # Indian grouping
+    ("500.00", True),        # bare 2-decimal amount
+    ("₹1,500.00", True),     # with a currency marker
+    ("1234567", False),      # a bare integer run — a cheque / reference / customer id, NOT money
+    ("2026", False),         # a year
+    ("ABCDE1234F", False),   # a PAN
+    ("", False),
+])
+def test_is_currency_like_discriminates_money_from_reference_numbers(token, expected):
+    assert _is_currency_like(token) is expected
+
+
+def _w(text: str, left: int) -> _Word:
+    # a body word (top well below any header) with a small box; x_center = left + width/2
+    return _Word(text=text, left=left, top=500, width=60, height=20, conf=0.9)
+
+
+def test_count_unstructured_money_flags_out_of_column_amounts_only():
+    columns = {
+        "date": _Column("date", 0, 100),
+        "debit": _Column("debit", 100, 200),
+        "balance": _Column("balance", 200, 300),
+    }
+    header_bottom = 100.0
+    words = [
+        _w("01-06-2026", 10),     # date column
+        _w("2,000.00", 130),      # debit column (in-column money — not counted)
+        _w("13,000.00", 230),     # balance column (in-column money — not counted)
+        _w("500.00", 400),        # OUT of every column, currency-formatted -> an uncaptured fee
+        _w("9876543210", 420),    # OUT of columns but a reference number -> NOT counted
+    ]
+    # exactly one uncaptured monetary figure; the reference number does not inflate the count
+    assert _count_unstructured_money(words, columns, header_bottom) == 1
+
+
+# --- Born-digital text-layer extraction: exact, OCR-free, VLM-free (ADR-004 Tier 2) -------------
+# A born-digital bank PDF carries the exact printed text + geometry. Reading it directly gives the
+# deterministic statement parser exact input — no OCR misparse, no VLM/cloud dependency. These prove
+# the text-layer path is preferred and parses the EXACT figures, and that it degrades to OCR for scans.
+
+_TL_COLS_PT = {"date": 40, "description": 120, "debit": 300, "credit": 400, "balance": 500}
+
+
+def _put_table(page, rows, opening, closing, total_debit, total_credit, charge=None, y=50):
+    """Insert a statement table onto a pymupdf page at column x-positions; return the next y."""
+    for name in ("date", "description", "debit", "credit", "balance"):
+        page.insert_text((_TL_COLS_PT[name], y), name.capitalize(), fontsize=10)
+    y += 26
+    if opening is not None:
+        page.insert_text((_TL_COLS_PT["date"], y), "01-Apr", fontsize=10)
+        page.insert_text((_TL_COLS_PT["description"], y), "Opening Balance", fontsize=10)
+        page.insert_text((_TL_COLS_PT["balance"], y), opening, fontsize=10)
+        y += 22
+    for date, desc, debit, credit, balance in rows:
+        page.insert_text((_TL_COLS_PT["date"], y), date, fontsize=10)
+        page.insert_text((_TL_COLS_PT["description"], y), desc, fontsize=10)
+        if debit:
+            page.insert_text((_TL_COLS_PT["debit"], y), debit, fontsize=10)
+        if credit:
+            page.insert_text((_TL_COLS_PT["credit"], y), credit, fontsize=10)
+        page.insert_text((_TL_COLS_PT["balance"], y), balance, fontsize=10)
+        y += 22
+    if charge is not None:  # a SUMMARY fee row: label + amount in the debit column, NO running balance
+        page.insert_text((_TL_COLS_PT["description"], y), "Service Charges", fontsize=10)
+        page.insert_text((_TL_COLS_PT["debit"], y), charge, fontsize=10)
+        y += 22
+    if closing is not None:
+        page.insert_text((_TL_COLS_PT["description"], y), "Closing Balance", fontsize=10)
+        page.insert_text((_TL_COLS_PT["balance"], y), closing, fontsize=10)
+        y += 22
+    if total_debit is not None:
+        page.insert_text((_TL_COLS_PT["description"], y), "Total", fontsize=10)
+        page.insert_text((_TL_COLS_PT["debit"], y), total_debit, fontsize=10)
+        page.insert_text((_TL_COLS_PT["credit"], y), total_credit, fontsize=10)
+    return y
+
+
+def _born_digital_pdf(rows=_GENUINE_ROWS, opening="10,000.00", closing="14,000.00",
+                      total_debit="2,000.00", total_credit="6,000.00", charge=None) -> bytes:
+    """A one-page PDF with a REAL text layer (pymupdf insert_text), not a raster — born-digital."""
+    import pymupdf
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    _put_table(page, rows, opening, closing, total_debit, total_credit, charge=charge)
+    out = doc.tobytes()
+    doc.close()
+    return out
+
+
+def _two_page_pdf(page1_closing: str, page2_opening: str) -> bytes:
+    """A 2-page born-digital PDF; the zipper checks page-1 closing carries to page-2 opening.
+
+    Page 1 carries two transactions (so its own chain is assertable, as any real statement page is);
+    the caller sets the page-1 stated closing and the page-2 stated opening to make the boundary match
+    or break.
+    """
+    import pymupdf
+
+    doc = pymupdf.open()
+    p1 = doc.new_page(width=612, height=792)
+    _put_table(p1, [("02-Apr", "Salary", "", "5,000.00", "15,000.00"),
+                    ("08-Apr", "Bonus", "", "3,000.00", "18,000.00")],
+               opening="10,000.00", closing=page1_closing, total_debit=None, total_credit=None)
+    p2 = doc.new_page(width=612, height=792)
+    _put_table(p2, [("12-Apr", "Rent", "2,000.00", "", "16,000.00")],
+               opening=page2_opening, closing="16,000.00", total_debit=None, total_credit=None)
+    out = doc.tobytes()
+    doc.close()
+    return out
+
+
+def test_text_layer_words_reads_exact_born_digital_geometry():
+    words = text_layer_words(_born_digital_pdf())
+    assert words is not None and words, "a born-digital PDF must yield text-layer words"
+    assert all(w.conf == 1.0 for w in words)  # a text-layer glyph is not a probabilistic read
+    texts = {w.text for w in words}
+    assert "15,000.00" in texts and "Balance" in texts  # exact strings, not OCR approximations
+
+
+def test_born_digital_statement_parsed_exactly_from_text_layer():
+    words = text_layer_words(_born_digital_pdf())
+    assert words is not None
+    stmt = build_statement(words)
+    assert stmt is not None
+    # EXACT figures — no OCR error is possible on a text layer.
+    assert stmt.opening_balance == Decimal("10000.00")
+    assert stmt.closing_balance == Decimal("14000.00")
+    assert [t.balance for t in stmt.transactions] == [
+        Decimal("15000.00"), Decimal("13000.00"), Decimal("14000.00")
+    ]
+    assert stmt.stated_total_debits == Decimal("2000.00")
+    assert stmt.stated_total_credits == Decimal("6000.00")
+
+
+def test_document_parse_prefers_text_layer_and_reconciles():
+    """The analyzer sources the statement from the text layer for a born-digital PDF, and it reconciles."""
+    ctx = AnalysisContext(
+        session_id="t", intake_mode=Mode.FILE, doc_type="financial_statement",
+        file_bytes=_born_digital_pdf(),
+    )
+    sig = DocumentParseAnalyzer().analyze(ctx)
+    assert sig.measurements.get("statement_source") == "pdf_text_layer"
+    stmt = ctx.shared["statement"]
+    result = check_consistency(stmt)
+    assert result.evaluated and not result.violations  # exact input -> reconciles, no false flag
+
+
+def test_text_layer_words_none_for_non_pdf_image():
+    # a raster image (no text layer) must return None so the caller falls back to OCR-on-raster
+    assert text_layer_words(_png_bytes(_render_statement(_GENUINE_ROWS))) is None
+
+
+def test_born_digital_stated_charge_extracted_and_reconciles():
+    """A summary 'Service Charges' row (fee, no running balance) is captured and folds into the math.
+
+    opening 10,000 -> +5,000 -> -2,000 -> +1,000 (last balance 14,000); a 50 service charge brings the
+    closing to 13,950. build_statement must capture stated_charges=50 (NOT as a transaction) and the
+    engine must then reconcile cleanly — KNOWN_ISSUES #4 hidden-fee case, end to end from the text layer.
+    """
+    pdf = _born_digital_pdf(charge="50.00", closing="13,950.00")
+    words = text_layer_words(pdf)
+    assert words is not None
+    stmt = build_statement(words)
+    assert stmt is not None
+    assert stmt.stated_charges == Decimal("50.00")
+    assert len(stmt.transactions) == 3  # the charge is NOT counted as a transaction row
+    result = check_consistency(stmt)
+    assert result.evaluated and not result.violations  # the stated fee explains the residual -> clean
+
+
+def test_multipage_zipper_pairs_continuous_and_broken():
+    """page_boundary_pairs reads each page's boundary balance; a deleted page breaks continuity."""
+    ok_pairs = page_boundary_pairs(text_layer_words_per_page(_two_page_pdf("18,000.00", "18,000.00")))
+    assert ok_pairs == [(Decimal("18000.00"), Decimal("18000.00"))]  # closing[1] == opening[2]
+
+    broken_pairs = page_boundary_pairs(text_layer_words_per_page(_two_page_pdf("18,000.00", "9,000.00")))
+    assert broken_pairs == [(Decimal("18000.00"), Decimal("9000.00"))]
+    # and the engine scores that discontinuity as tampering
+    p1_words = text_layer_words(_two_page_pdf("18,000.00", "9,000.00"))
+    assert p1_words is not None
+    stmt = build_statement(p1_words)
+    assert stmt is not None
+    stmt.page_boundaries = broken_pairs
+    result = check_consistency(stmt)
+    assert any(v.kind == "page_zipper" for v in result.violations)
+
+
+def test_document_parse_populates_page_boundaries_for_multipage():
+    ctx = AnalysisContext(
+        session_id="t", intake_mode=Mode.FILE, doc_type="financial_statement",
+        file_bytes=_two_page_pdf("18,000.00", "18,000.00"),
+    )
+    sig = DocumentParseAnalyzer().analyze(ctx)
+    assert sig.measurements.get("statement_source") == "pdf_text_layer"
+    assert sig.measurements.get("page_boundaries_checked") == 1
+    assert ctx.shared["statement"].page_boundaries == [(Decimal("18000.00"), Decimal("18000.00"))]
 
 
 def test_genuine_end_to_end_ocr_then_arithmetic_passes():

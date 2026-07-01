@@ -106,6 +106,29 @@ _DOB_RE = re.compile(
 _NAME_TITLES = re.compile(r"^(?:mr|mrs|ms|miss|shri|smt|dr|m/s)\.?\s+", re.IGNORECASE)
 _NAME_TRAILING = re.compile(r"\s+(?:a/?c|account|pan|aadhaar|dob|address).*$", re.IGNORECASE)
 
+# Aadhaar context markers. A bare 12-digit run is just as likely a bank Customer ID / CIF / account
+# number as an Aadhaar; routing every such number through the UIDAI Verhoeff checksum produced false
+# "forged Aadhaar" flags on genuine statements (KNOWN_ISSUES #5.2). We only treat a 12-digit number as
+# an Aadhaar when it carries Aadhaar context: an Aadhaar/UID/VID label nearby (English or the Devanagari
+# आधार), OR the canonical UIDAI 4-4-4 spaced print grouping (which customer IDs / account numbers do not
+# use). ``aadhaa?r`` covers both the "aadhaar" and "aadhar" spellings.
+_AADHAAR_CONTEXT_RE = re.compile(r"aadhaa?r|uidai|\buid\b|\bvid\b|आधार", re.IGNORECASE)
+_AADHAAR_SPACED_RE = re.compile(r"^[0-9]{4}\s[0-9]{4}\s[0-9]{4}$")
+_AADHAAR_CONTEXT_WINDOW = 40  # chars of preceding same-line text scanned for an Aadhaar label
+
+
+def _has_aadhaar_context(text: str, start: int, matched: str) -> bool:
+    """True when a 12-digit run is plausibly an Aadhaar: printed 4-4-4, or labelled as one nearby.
+
+    Deliberately conservative — a number with neither the canonical spacing nor a nearby Aadhaar label
+    is NOT run through the checksum, so an ordinary Customer ID can never manufacture a forgery flag.
+    """
+    if _AADHAAR_SPACED_RE.match(matched.strip()):
+        return True
+    window = text[max(0, start - _AADHAAR_CONTEXT_WINDOW):start]
+    window = window.rsplit("\n", 1)[-1]  # stay on the number's own line — do not read a neighbouring field
+    return bool(_AADHAAR_CONTEXT_RE.search(window))
+
 
 @dataclass(frozen=True)
 class ExtractedEntities:
@@ -178,11 +201,18 @@ def extract_entities(text: str) -> ExtractedEntities:
 
     aadhaar = aadhaar_invalid = None
     for m in _AADHAAR_RE.finditer(text):
-        digits = re.sub(r"\s", "", m.group(1))
-        if len(digits) == 12:
-            if verhoeff_validate(digits):
-                aadhaar = digits
-                break
+        raw_match = m.group(1)
+        digits = re.sub(r"\s", "", raw_match)
+        if len(digits) != 12:
+            continue
+        # Context gate (KNOWN_ISSUES #5.2): only a number that actually looks/reads like an Aadhaar is
+        # routed through the UIDAI checksum — a bare Customer ID / account number is skipped entirely.
+        if not _has_aadhaar_context(text, m.start(), raw_match):
+            continue
+        if verhoeff_validate(digits):
+            aadhaar = digits
+            break
+        if aadhaar_invalid is None:
             aadhaar_invalid = digits  # keep the first shape-valid-but-checksum-failed candidate
 
     account = None
@@ -280,7 +310,8 @@ class EntityExtractionAnalyzer:
                 pan_claim = cg.first("pan")
                 if pan_claim and pan_claim.value:
                     entities = ExtractedEntities(
-                        pan=pan_claim.value.upper(), aadhaar=entities.aadhaar, aadhaar_invalid=entities.aadhaar_invalid,
+                        pan=pan_claim.value.upper(), aadhaar=entities.aadhaar,
+                        aadhaar_invalid=entities.aadhaar_invalid,
                         ifsc=entities.ifsc, account_number=entities.account_number,
                         name=entities.name,
                         dob=entities.dob

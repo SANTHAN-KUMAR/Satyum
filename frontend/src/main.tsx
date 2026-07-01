@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { CopilotProvider } from "./lib/CopilotContext";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -20,7 +21,9 @@ createRoot(rootEl).render(
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
-          <App />
+          <CopilotProvider>
+            <App />
+          </CopilotProvider>
         </BrowserRouter>
       </QueryClientProvider>
     </ErrorBoundary>

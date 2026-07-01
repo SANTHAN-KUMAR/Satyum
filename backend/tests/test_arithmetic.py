@@ -153,3 +153,122 @@ def test_analyzer_surfaces_misparse_as_not_evaluated():
     sig = az.analyze(_ctx_with(_genuine_with_balance(2, "1")))
     assert sig.status == SignalStatus.NOT_EVALUATED
     assert sig.suspicion is None  # never a fabricated pass OR a false tamper
+
+
+# --- Failure typing + completeness abstain: don't false-reject genuine statements -----------------
+# The Canara-class failure: a genuine statement with a hidden fee/charge the extractor missed must NOT
+# be condemned as tampered. These prove the engine now distinguishes "I can't verify this" (REVIEW)
+# from "this is fraudulent" (REJECT). Each would FAIL against the old code, which flagged every break
+# at suspicion 0.9. They still prove discrimination: a real edited *balance* stays strong.
+
+
+def _aggregate_only_stmt() -> StatementData:
+    """Every printed balance chains perfectly, but a stated total is off (an unitemised fee/charge)."""
+    stmt = genuine_statement()
+    # Rows still reconcile (opening 10k; +5k→15k; -2k→13k; +1k→14k). Only the STATED total credits is
+    # off by a small amount — the signature of an aggregate the parser didn't itemise, not a row edit.
+    stmt.stated_total_credits = Decimal("6050")  # +50 vs the 6,000 the rows sum to
+    return stmt
+
+
+def test_aggregate_only_discrepancy_is_review_not_reject():
+    """Rows chain, only an aggregate is off by a small amount -> REVIEW-band suspicion, never a reject."""
+    result = check_consistency(_aggregate_only_stmt())
+    assert result.evaluated is True
+    assert result.violations, "the aggregate discrepancy must still be surfaced"
+    assert all(v.kind != "running_balance" for v in result.violations)  # no per-row break
+
+    sig = ArithmeticConsistencyAnalyzer().analyze(_ctx_with(_aggregate_only_stmt()))
+    assert sig.status == SignalStatus.VALID
+    # The crux: an aggregate-only gap scores in the REVIEW band (score = 100*(1-susp) >= 60), so it can
+    # never, on its own, auto-REJECT a genuine statement. Would FAIL against the old 0.9.
+    assert sig.suspicion is not None and sig.suspicion <= 0.40
+    assert sig.measurements["severity"] == "aggregate_only"
+
+
+def test_running_balance_edit_still_scores_strong_tamper():
+    """Discrimination guard: a real edited balance breaks the running chain -> full tamper strength."""
+    sig = ArithmeticConsistencyAnalyzer().analyze(_ctx_with(tampered_balance_statement()))
+    assert sig.status == SignalStatus.VALID
+    assert sig.suspicion is not None and sig.suspicion >= 0.85
+    assert sig.measurements["severity"] == "running_balance_break"
+
+
+def test_incomplete_extraction_abstains_not_reject():
+    """A statement flagged as having uncaptured monetary figures must ABSTAIN, not assert tampering.
+
+    Same broken ledger, two completeness states: with an uncaptured fee figure the engine is pending
+    (REVIEW); marked complete, the identical break is asserted as tampering. Proves the completeness
+    signal actually gates the verdict — FAILS against code that ignores it.
+    """
+    broken = tampered_balance_statement()  # a genuine break (running-balance)
+    broken.unstructured_money_tokens = 1   # ...but the page carried a figure we could not place
+    result = check_consistency(broken)
+    assert result.evaluated is False, "an incomplete extraction must abstain, never assert tampering"
+    assert "incomplete" in result.reason.lower()
+
+    # Marked complete, the SAME break is a confident tamper -> the signal genuinely depends on it.
+    complete = tampered_balance_statement()
+    assert complete.unstructured_money_tokens == 0
+    assert check_consistency(complete).evaluated is True
+
+    sig = ArithmeticConsistencyAnalyzer().analyze(_ctx_with(broken))
+    assert sig.status == SignalStatus.NOT_EVALUATED and sig.suspicion is None
+
+
+# --- Robust reconciliation: stated fees/charges + multi-page zipper (KNOWN_ISSUES #4) -------------
+
+
+def test_stated_charge_reconciles_via_fee_aware_reconciliation():
+    """A genuine statement with a summary fee reconciles cleanly once the stated charge is folded in.
+
+    opening 10,000; +5,000 -> 15,000; -2,000 -> 13,000; then a SUMMARY 'Service Charges' of 50 (not a
+    transaction row) brings the closing to 12,950. Folding the stated charge into invariants 2 & 4 makes
+    it reconcile — without it the identical numbers break (the residual is unexplained). Discrimination.
+    """
+    stmt = StatementData(
+        opening_balance=Decimal("10000"),
+        closing_balance=Decimal("12950"),
+        transactions=[
+            Transaction(index=0, credit=Decimal("5000"), balance=Decimal("15000")),
+            Transaction(index=1, debit=Decimal("2000"), balance=Decimal("13000")),
+        ],
+        stated_charges=Decimal("50"),
+    )
+    result = check_consistency(stmt)
+    assert result.evaluated and not result.violations  # the stated fee explains the residual -> clean
+
+    stmt.stated_charges = None  # remove the fee: the same numbers no longer reconcile
+    assert check_consistency(stmt).violations
+
+
+def test_stated_interest_reconciles_via_fee_aware_reconciliation():
+    """Interest credited as a summary line (money IN, not itemised) reconciles once folded in."""
+    stmt = StatementData(
+        opening_balance=Decimal("10000"),
+        closing_balance=Decimal("13100"),  # 13,000 last balance + 100 interest
+        transactions=[
+            Transaction(index=0, credit=Decimal("5000"), balance=Decimal("15000")),
+            Transaction(index=1, debit=Decimal("2000"), balance=Decimal("13000")),
+        ],
+        stated_interest=Decimal("100"),
+    )
+    result = check_consistency(stmt)
+    assert result.evaluated and not result.violations
+
+
+def test_page_zipper_breaks_on_discontinuous_boundary_and_scores_strong():
+    """A page boundary that does not carry forward (a deleted page) is a chain discontinuity -> tamper."""
+    stmt = genuine_statement()
+    stmt.page_boundaries = [(Decimal("14000"), Decimal("14000"))]  # continuous -> no zipper break
+    assert not any(v.kind == "page_zipper" for v in check_consistency(stmt).violations)
+
+    stmt.page_boundaries = [(Decimal("14000"), Decimal("9000"))]  # a deleted page -> the boundary jumps
+    result = check_consistency(stmt)
+    zipper = [v for v in result.violations if v.kind == "page_zipper"]
+    assert zipper and zipper[0].expected == Decimal("14000") and zipper[0].printed == Decimal("9000")
+
+    sig = ArithmeticConsistencyAnalyzer().analyze(_ctx_with(stmt))
+    assert sig.status == SignalStatus.VALID
+    assert sig.suspicion is not None and sig.suspicion >= 0.85  # discontinuity = strong, not REVIEW
+    assert sig.measurements["severity"] == "running_balance_break"

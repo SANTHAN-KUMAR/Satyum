@@ -12,7 +12,7 @@ export function SampleView() {
     <div className="space-y-4">
       <div
         role="note"
-        className="flex items-center gap-2.5 rounded-lg border border-dashed border-amber-500/60 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-200"
+        className="flex items-center gap-2.5 rounded-lg border border-dashed border-verdict-review/60 bg-verdict-review-soft px-4 py-2.5 text-sm text-verdict-review"
       >
         <FlaskConical size={16} className="shrink-0" aria-hidden="true" />
         <span>
@@ -24,7 +24,9 @@ export function SampleView() {
         trust={SAMPLE_TRUST_SCORE}
         previewUrl={null}
         isPdf
-        fileName="sample-statement.pdf"
+        // Prefixed so the global Copilot drawer's "Analyzing …" header can't be mistaken for a real
+        // result once this registers as the drawer's active context (CLAUDE.md §9).
+        fileName="[SAMPLE] sample-statement.pdf"
       />
     </div>
   );

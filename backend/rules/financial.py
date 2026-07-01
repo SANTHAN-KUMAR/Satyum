@@ -219,6 +219,40 @@ def f7_income_consistency(graph: ClaimGraph, gate: float, tol: Decimal) -> RuleR
     return _failed("F7", reason, (_ev("income_proof", "taxable_income", taxable_claim, brk),))
 
 
+# --- Failure-typing classification (mirrors forensics/arithmetic.py — the OCR path) ---------------
+# A broken RUNNING-balance chain (F1) is the signature of an edited transaction figure — a printed
+# balance that does not follow from its neighbours — so it is strong tamper evidence. An AGGREGATE-only
+# break (F2/F3/F4: closing / column totals / net reconciliation, with the per-row chain intact) is
+# ambiguous: an unextracted fee/charge reflected in the balances produces it just as an edited stated
+# total does. We cannot separate them from the numbers, so an aggregate-only break is graded into the
+# REVIEW band, never an auto-REJECT (KNOWN_ISSUES #4 — do not false-reject a genuine statement).
+BALANCE_CHAIN_RULES = frozenset({"F1"})
+AGGREGATE_RULES = frozenset({"F2", "F3", "F4"})
+ARITHMETIC_RULES = BALANCE_CHAIN_RULES | AGGREGATE_RULES  # subject to the completeness abstain
+
+
+def statement_scale(graph: ClaimGraph, gate: float) -> Decimal:
+    """Median magnitude of the trusted balance figures — grades an aggregate residual's materiality.
+
+    Robust to one garbage cell (median, not mean). Mirrors ``forensics.arithmetic._statement_scale``
+    but reads the claim graph. Returns 0 when no trusted balance is present (materiality then off).
+    """
+    mags: list[Decimal] = []
+    for pred in ("opening_balance", "closing_balance"):
+        v = _scalar(graph, pred, gate)[0]
+        if v is not None and v != 0:
+            mags.append(abs(v))
+    for _seq, cells in _transactions(graph):
+        v = _cell(cells.get("running_balance"), gate)
+        if v is not None and v != 0:
+            mags.append(abs(v))
+    if not mags:
+        return Decimal(0)
+    mags.sort()
+    mid = len(mags) // 2
+    return mags[mid] if len(mags) % 2 == 1 else (mags[mid - 1] + mags[mid]) / 2
+
+
 # rule_id -> (function, applicable doc types)
 _RULES: list[tuple[str, object, frozenset[str]]] = [
     ("F1", f1_running_balance, BANK_STATEMENT_TYPES),

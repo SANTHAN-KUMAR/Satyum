@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/shell/AppShell";
 import { OnboardingFlow } from "./pages/onboarding/OnboardingFlow";
+import { CasePage } from "./pages/CasePage";
 import { ConsolePage } from "./pages/ConsolePage";
 import { ConsortiumPage } from "./pages/ConsortiumPage";
 import { IntelligencePage } from "./pages/IntelligencePage";
@@ -16,6 +17,7 @@ export default function App() {
       <Route path="/onboarding/*" element={<OnboardingFlow />} />
       <Route element={<AppShell />}>
         <Route path="/console" element={<ConsolePage />} />
+        <Route path="/case" element={<CasePage />} />
         <Route path="/consortium" element={<ConsortiumPage />} />
         <Route path="/model" element={<IntelligencePage />} />
       </Route>

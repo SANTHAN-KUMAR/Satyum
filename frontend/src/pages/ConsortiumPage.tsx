@@ -8,7 +8,7 @@ import {
   type RegistryMatch,
   type RingEvidence,
 } from "@/api/federation";
-import { RingGraph } from "@/components/network/RingGraph";
+import { RingGraph, RingGraphGhost } from "@/components/network/RingGraph";
 
 /**
  * The Consortium simulator — HOW you test multi-bank pattern identification. Act as any member bank,
@@ -161,6 +161,14 @@ export function ConsortiumPage() {
             <p className="mt-4 text-sm text-slate-400">
               No ring yet — submit at least 3 “ring member” applications across banks, then detect.
             </p>
+          )}
+          {!rings && (
+            <div className="mt-4">
+              <RingGraphGhost />
+              <p className="mt-1 text-center text-xs text-slate-500">
+                Illustrative — this is what a detected ring's shared-identifier graph looks like.
+              </p>
+            </div>
           )}
         </section>
       </div>

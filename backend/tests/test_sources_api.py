@@ -82,6 +82,46 @@ def test_digilocker_verified_pull_feeds_the_core(anchored_app):
     assert body["trust_score"]["tier_reached"] == "source-verified"
 
 
+def _encrypt(pdf_bytes: bytes, password: str) -> bytes:
+    import io
+
+    import pikepdf
+
+    with pikepdf.open(io.BytesIO(pdf_bytes)) as p:
+        out = io.BytesIO()
+        p.save(out, encryption=pikepdf.Encryption(user=password, owner=password, R=6))
+        return out.getvalue()
+
+
+def test_source_pull_prompts_for_password_on_encrypted_pdf(anchored_app):
+    app, _ = anchored_app
+    client = TestClient(app)
+    resp = client.post(
+        "/api/sources/digilocker/pull",
+        data=_form(doc_class="financial_statement"),
+        files={"file": ("locked.pdf", _encrypt(minimal_pdf(), "AADH2024"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["needs_password"] is True  # a recoverable prompt, not a verdict
+    assert body["source_result"] is None
+    assert body["password_error"] is None
+
+
+def test_source_pull_rejects_wrong_password(anchored_app):
+    app, _ = anchored_app
+    client = TestClient(app)
+    resp = client.post(
+        "/api/sources/digilocker/pull",
+        data=_form(doc_class="financial_statement", pdf_password="wrong"),
+        files={"file": ("locked.pdf", _encrypt(minimal_pdf(), "AADH2024"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["needs_password"] is True
+    assert body["password_error"]  # explicit, retryable
+
+
 def test_digilocker_unsigned_pdf_is_absent_no_trust_score(anchored_app):
     app, _ = anchored_app
     client = TestClient(app)

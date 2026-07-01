@@ -98,6 +98,7 @@ class DigiLockerProvider:
             file_bytes=payload,
             file_name="digilocker_issued.pdf",
             file_mime="application/pdf",
+            pdf_password=doc_request.pdf_password,  # decrypt an encrypted Aadhaar/e-statement in memory
         )
         analyzer = PadesSignatureAnalyzer(anchor_dir=self._anchor_dir)
         if not analyzer.applicable(ctx):

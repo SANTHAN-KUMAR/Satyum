@@ -38,80 +38,97 @@ _IMPLEMENTED = {
 _GATED = {"sarvam"}
 
 
-def _make_extractor(
+def _make_extractors(
     *,
     provider: str,
     model: str,
-    api_key: str,
+    api_keys_str: str,
     settings: Settings,
     handled_scripts: frozenset[str],
-) -> VLMExtractor | None:
-    """Build one concrete extractor, or ``None`` if the provider is gated/unknown (never a fake)."""
+) -> list[VLMExtractor]:
+    """Build concrete extractors for each API key provided (comma-separated), or [] if gated/unknown."""
     provider = (provider or "").strip().lower()
     if provider in ("", "none"):
-        return None
-    if provider == "anthropic":
-        return AnthropicVLMExtractor(
-            model=model or "claude-sonnet-4-6",
-            api_key=api_key,
-            max_tokens=settings.vlm_max_tokens,
-            timeout=settings.vlm_timeout_seconds,
-            handled_scripts=handled_scripts,
-        )
-    if provider == "gemini":
-        return GeminiVLMExtractor(
-            model=model or "gemini-2.5-flash",
-            api_key=api_key,
-            timeout=settings.vlm_timeout_seconds,
-            handled_scripts=handled_scripts,
-        )
-    if provider == "groq":
-        return GroqVLMExtractor(
-            model=model or "meta-llama/llama-4-scout-17b-16e-instruct",
-            api_key=api_key,
-            max_tokens=settings.vlm_max_tokens,
-            timeout=settings.vlm_timeout_seconds,
-            handled_scripts=handled_scripts,
-        )
-    if provider == "cloudflare":
-        acct = (settings.vlm_cloudflare_account_id or "").strip()
-        if not acct:
-            logger.warning("VLM provider 'cloudflare' needs SATYUM_VLM_CLOUDFLARE_ACCOUNT_ID — gating")
-            return None
-        return OpenAICompatibleVLMExtractor(
-            base_url=f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/v1",
-            model=model or "@cf/mistralai/mistral-small-3.1-24b-instruct",
-            api_key=api_key,
-            label="cloudflare",
-            timeout=settings.vlm_timeout_seconds,
-            max_tokens=settings.vlm_max_tokens,
-            handled_scripts=handled_scripts,
-        )
-    if provider in ("openai_compatible", "openrouter", "together", "deepinfra", "fireworks", "ollama"):
-        base = (settings.vlm_base_url or "").strip()
-        if not base:
-            logger.warning("VLM provider %r needs SATYUM_VLM_BASE_URL — gating", provider)
-            return None
-        return OpenAICompatibleVLMExtractor(
-            base_url=base,
-            model=model,
-            api_key=api_key,
-            label=provider,
-            timeout=settings.vlm_timeout_seconds,
-            max_tokens=settings.vlm_max_tokens,
-            require_key=(provider != "ollama"),  # a local Ollama endpoint needs no API key
-            handled_scripts=handled_scripts,
-        )
-    if provider in _GATED:
-        logger.warning(
-            "VLM provider %r is recognised (the Indic specialist) but its client is not yet wired: "
-            "Sarvam Vision's bounding-box response schema is unconfirmed without a live key. Falling "
-            "back to the default reader; the specialist lands once its response contract is confirmed.",
-            provider,
-        )
-        return None
-    logger.warning("VLM provider %r is unknown; no extractor constructed", provider)
-    return None
+        return []
+
+    keys = [k.strip() for k in (api_keys_str or "").split(",") if k.strip()]
+    if not keys:
+        keys = [""]  # Allow providers that don't need a key (like ollama) to run once
+
+    extractors: list[VLMExtractor] = []
+    for api_key in keys:
+        ext = None
+        if provider == "anthropic":
+            ext = AnthropicVLMExtractor(
+                model=model or "claude-sonnet-4-6",
+                api_key=api_key,
+                max_tokens=settings.vlm_max_tokens,
+                timeout=settings.vlm_timeout_seconds,
+                handled_scripts=handled_scripts,
+            )
+        elif provider == "gemini":
+            ext = GeminiVLMExtractor(
+                model=model or "gemini-2.5-flash",
+                api_key=api_key,
+                timeout=settings.vlm_timeout_seconds,
+                handled_scripts=handled_scripts,
+            )
+        elif provider == "groq":
+            ext = GroqVLMExtractor(
+                model=model or "qwen/qwen3.6-27b",
+                api_key=api_key,
+                max_tokens=settings.vlm_max_tokens,
+                timeout=settings.vlm_timeout_seconds,
+                handled_scripts=handled_scripts,
+                # Groq's vision endpoints sometimes hard-400 on strict JSON mode when an image is
+                # attached (KNOWN_ISSUES #1). Ship it off by default so the fallback lane never crashes;
+                # the injection-hardened prompt + fence-stripping parser still yield a validated object.
+                use_json_response_format=False,
+            )
+        elif provider == "cloudflare":
+            acct = (settings.vlm_cloudflare_account_id or "").strip()
+            if not acct:
+                logger.warning("VLM provider 'cloudflare' needs SATYUM_VLM_CLOUDFLARE_ACCOUNT_ID — gating")
+                return []
+            ext = OpenAICompatibleVLMExtractor(
+                base_url=f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/v1",
+                model=model or "@cf/mistralai/mistral-small-3.1-24b-instruct",
+                api_key=api_key,
+                label="cloudflare",
+                timeout=settings.vlm_timeout_seconds,
+                max_tokens=settings.vlm_max_tokens,
+                handled_scripts=handled_scripts,
+            )
+        elif provider in ("openai_compatible", "openrouter", "together", "deepinfra", "fireworks", "ollama"):
+            base = (settings.vlm_base_url or "").strip()
+            if not base:
+                logger.warning("VLM provider %r needs SATYUM_VLM_BASE_URL — gating", provider)
+                return []
+            ext = OpenAICompatibleVLMExtractor(
+                base_url=base,
+                model=model,
+                api_key=api_key,
+                label=provider,
+                timeout=settings.vlm_timeout_seconds,
+                max_tokens=settings.vlm_max_tokens,
+                require_key=(provider != "ollama"),
+                handled_scripts=handled_scripts,
+            )
+        elif provider in _GATED:
+            if not extractors:
+                logger.warning(
+                    "VLM provider %r is recognised (the Indic specialist) but its client is not yet wired. "
+                    "Falling back to the default reader.",
+                    provider,
+                )
+            return []
+            
+        if ext is not None:
+            extractors.append(ext)
+
+    if not extractors and provider not in _GATED:
+        logger.warning("VLM provider %r is unknown; no extractor constructed", provider)
+    return extractors
 
 
 def build_default_extractor(settings: Settings) -> VLMExtractor | None:
@@ -120,38 +137,45 @@ def build_default_extractor(settings: Settings) -> VLMExtractor | None:
     Wraps the default reader in a :class:`LanguageRoutedExtractor` when an Indic specialist is
     configured, so vernacular documents route to it; otherwise returns the default reader directly.
     """
-    primary = _make_extractor(
+    primary = _make_extractors(
         provider=settings.vlm_provider,
         model=settings.vlm_model,
-        api_key=settings.vlm_api_key,
+        api_keys_str=settings.vlm_api_key,
         settings=settings,
         handled_scripts=frozenset({"latin"}),
     )
-    fallback = _make_extractor(
+    fallback = _make_extractors(
         provider=settings.vlm_fallback_provider,
         model=settings.vlm_fallback_model,
-        api_key=settings.vlm_fallback_api_key,
+        api_keys_str=settings.vlm_fallback_api_key,
         settings=settings,
         handled_scripts=frozenset({"latin"}),
     )
-    # Compose the default reader with its fallback (ADR-004 §7 resilience). If only the fallback is
-    # configured it simply becomes the default — a configured reader is never wasted.
-    chain = [r for r in (primary, fallback) if r is not None]
+    fallback2 = _make_extractors(
+        provider=settings.vlm_fallback2_provider,
+        model=settings.vlm_fallback2_model,
+        api_keys_str=settings.vlm_fallback2_api_key,
+        settings=settings,
+        handled_scripts=frozenset({"latin"}),
+    )
+    
+    # Compose the massive chain. FallbackExtractor natively moves through the list on failure!
+    chain = primary + fallback + fallback2
     if not chain:
         return None
     default: VLMExtractor = chain[0] if len(chain) == 1 else FallbackExtractor(chain)
 
-    indic = _make_extractor(
+    indic = _make_extractors(
         provider=settings.vlm_indic_provider,
         model=settings.vlm_indic_model,
-        api_key=settings.vlm_indic_api_key,
+        api_keys_str=settings.vlm_indic_api_key,
         settings=settings,
         handled_scripts=frozenset({"indic", "latin"}),
     )
-    if indic is not None:
+    if indic:
         return LanguageRoutedExtractor(
             default=default,
-            specialists={FAMILY_INDIC: indic},
+            specialists={FAMILY_INDIC: indic[0]},
             escalate_below_confidence=settings.vlm_escalate_below_confidence,
         )
     return default
