@@ -90,6 +90,24 @@ def test_detect_issuer_masthead_wins_over_an_incidental_transaction_line():
     assert detect_issuer(reversed_stmt) == "hdfc"
 
 
+def test_detect_issuer_uses_own_ifsc_when_masthead_has_no_extractable_bank_name():
+    """A real production case: some bank e-statement templates render the issuer's name/logo as an
+    IMAGE, not text — so NO bank name string appears anywhere on the page — while an incoming UPI
+    payment's narration line incidentally names a different bank as the counterparty. The #5.3 fix
+    (earliest-position wins) still picks the ONLY name it can find — the counterparty — because
+    there's no masthead text to out-rank it. The account's own IFSC code (CNRB0013503 = Canara) is a
+    hard, structured fact about whose account this is and must win regardless of what other bank names
+    appear in transaction narration. Would FAIL against the position-only #5.3 fix, which returns
+    'hdfc' here (no 'canara' text exists in this statement to compete with the UPI line)."""
+    statement = (
+        "Statement for A/c XXXXXXXXXX6385 for the period 02-Jun-2026 to 01-Jul-2026\n"
+        "Branch Name SPECIALISED SME BRANCH, NELLORE\n"
+        "IFSC Code CNRB0013503\n"
+        "06-06-2026 UPI/CR/696591312095/VAMSI KRI/HDFC/**ISHNA@AXL/PAYMENT 2,000.00 2,730.01\n"
+    )
+    assert detect_issuer(statement) == "canara"
+
+
 # --- extract_issuer_from_document: real PDFs ------------------------------------------------------
 
 

@@ -63,6 +63,31 @@ _ISSUER_PATTERNS: dict[str, str] = {
     "kotak mahindra": "kotak",
 }
 
+# RBI's 4-letter IFSC bank codes, keyed to the same SOURCE_CAPABILITY identifiers (entities.py's
+# _IFSC_RE: "AAAA0NNNNNN"). An IFSC printed in a statement's OWN account-details block identifies
+# whose account the document belongs to — a hard, structured fact — unlike a bank name appearing
+# anywhere in free text, which is frequently just a UPI/NEFT COUNTERPARTY mentioned in a transaction
+# narration line (e.g. "UPI/CR/.../HDFC/...") and not the issuer at all. Checked first in
+# detect_issuer() for exactly that reason: a genuine Canara e-passbook whose masthead is a logo image
+# (no extractable "Canara" text) but whose account section prints "IFSC Code CNRB0013503" must not be
+# mislabelled HDFC just because an incoming UPI payment happened to route through HDFC.
+_IFSC_BANK_PREFIX: dict[str, str] = {
+    "SBIN": "sbi",
+    "HDFC": "hdfc",
+    "ICIC": "icici",
+    "UTIB": "axis",
+    "CNRB": "canara",
+    "PUNB": "pnb",
+    "KKBK": "kotak",
+}
+_IFSC_RE = re.compile(r"\b([A-Z]{4}0[A-Z0-9]{6})\b")
+
+
+def _issuer_from_ifsc(text: str) -> str | None:
+    """The issuer implied by an IFSC code in the text, or ``None`` if none matches a known bank."""
+    m = _IFSC_RE.search(text.upper())
+    return _IFSC_BANK_PREFIX.get(m.group(1)[:4]) if m else None
+
 
 def issuer_is_sourceable(issuer_key: str | None) -> bool:
     if not issuer_key:
@@ -74,13 +99,26 @@ def issuer_is_sourceable(issuer_key: str | None) -> bool:
 def detect_issuer(text: str) -> str | None:
     """Return the capability key of the MOST PROMINENT issuer in ``text`` (the masthead), or ``None``.
 
-    Prominence is by position: the issuing bank's name sits in the header at the *top* of the document,
-    whereas an incidental competitor name ("UPI / HDFC BANK / …") appears far down in a transaction row.
-    We therefore return the issuer whose name appears EARLIEST, not whichever registry key we happen to
-    check first — otherwise a genuine Canara statement carrying an HDFC UPI line is mislabelled HDFC
-    (KNOWN_ISSUES #5.3). Specific multi-word names win ties over short whole-word keys. Pure string
-    logic — deterministic and directly unit-tested.
+    Checked in order of authority, not just position:
+    1. The account's OWN IFSC code (``_issuer_from_ifsc``) — a hard, structured fact about whose
+       account this statement is, printed in the account-details block. Checked first and, if found,
+       decisive: a bank name elsewhere in the text can only ever be a transaction counterparty
+       reference relative to this, never a competing masthead claim (KNOWN_ISSUES #7-adjacent —
+       some e-statement templates render the bank's name/logo as an image, so free-text name matching
+       alone can come up empty even on a genuine, unedited statement).
+    2. Otherwise, fall back to free-text name matching by POSITION: the issuing bank's name sits in the
+       header at the *top* of the document, whereas an incidental competitor name ("UPI / HDFC BANK /
+       …") appears far down in a transaction row. We return the issuer whose name appears EARLIEST, not
+       whichever registry key we happen to check first — otherwise a genuine Canara statement carrying
+       an HDFC UPI line is mislabelled HDFC (KNOWN_ISSUES #5.3). Specific multi-word names win ties
+       over short whole-word keys.
+
+    Pure string logic — deterministic and directly unit-tested.
     """
+    ifsc_issuer = _issuer_from_ifsc(text)
+    if ifsc_issuer is not None:
+        return ifsc_issuer
+
     t = re.sub(r"\s+", " ", text.lower())
     best_key: str | None = None
     best_pos = len(t) + 1

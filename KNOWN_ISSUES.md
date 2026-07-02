@@ -166,3 +166,44 @@ a single "m" (KAR-NALA → KA-MALA). Two things let this reach the UI unfixed:
   / `SATYUM_VLM_API_KEY` — see Issue #6). With no VLM, name extraction remains single-engine Tesseract
   OCR with no independent re-read; a genuine full text-field cross-read consensus (matching the numeric
   discipline) is a larger, unbuilt feature, not attempted here to avoid overclaiming.
+
+---
+
+## 8. Issuer Misattribution When the Masthead Has No Extractable Bank-Name Text
+
+**Date Discovered:** 2026-07-02
+
+**Symptom:**
+A genuine Canara Bank e-passbook PDF was flagged by `pdf_only_red_flag` as **"HDFC Bank is
+source-verifiable but only an unsigned PDF was submitted"** — the wrong issuer entirely, despite
+Issue #5.3's earliest-position masthead fix already being in place.
+
+**Root Cause:**
+Issue #5.3 fixed *ordering* (the earliest-appearing bank name wins over one buried in a transaction
+line) but assumed the genuine issuer's name always appears *somewhere* in the extractable page text. It
+doesn't always: this particular Canara e-passbook template renders the bank's name/logo as an image in
+the header, not text — `doc.load_page(0).get_text("text")` never contains the literal string "canara"
+anywhere on the page (verified directly against the actual uploaded PDF). Meanwhile the statement's own
+transactions include an incoming UPI payment narrated as `UPI/CR/.../HDFC/**ISHNA@AXL/...` — "HDFC" as a
+payment-gateway/counterparty reference, not the issuer. With no "canara" text to out-rank it by position,
+`detect_issuer` fell through to the *only* bank name it could find at all — the counterparty — and
+returned `hdfc`.
+
+**Resolution (Implemented):**
+- `verification/provenance.py` now checks the account's own **IFSC code** first, before any free-text
+  bank-name matching. An IFSC code (`AAAA0NNNNNN`) printed in a statement's account-details block is a
+  hard, structured fact about *whose account this is* — unlike a bank name floating anywhere in the
+  page text, it cannot be a stray counterparty reference. `_IFSC_BANK_PREFIX` maps the RBI's 4-letter
+  bank codes (`CNRB`→canara, `HDFC`→hdfc, `SBIN`→sbi, `ICIC`→icici, `UTIB`→axis, `PUNB`→pnb, `KKBK`→kotak)
+  onto the same `SOURCE_CAPABILITY` keys the free-text matcher already used, so a document whose account
+  section prints `IFSC Code CNRB0013503` is now decisively identified as Canara regardless of what other
+  bank names appear in transaction narration.
+- The existing free-text masthead-position logic (Issue #5.3) is unchanged and still runs as the
+  fallback for documents with no readable IFSC (e.g. a non-statement identity document).
+- Discrimination test added (`tests/test_red_flag.py::test_detect_issuer_uses_own_ifsc_when_masthead_has_no_extractable_bank_name`),
+  built directly from the real failing document's text shape (IFSC present, issuer name absent, a
+  competitor UPI line present) — would FAIL against the Issue #5.3 fix alone. Verified end-to-end
+  against the actual uploaded PDF (`extract_issuer_from_document` now returns `('canara', 'document')`,
+  previously `('hdfc', 'document')`).
+- 53 tests pass across `test_red_flag.py` + `test_entities.py` + `test_sources_api.py` + `test_api.py`;
+  `ruff check` clean.
