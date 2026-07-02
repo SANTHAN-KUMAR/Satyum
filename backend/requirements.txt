@@ -24,6 +24,12 @@ c2pa-python==0.36.0          # new Reader/Context/Settings API (verified against
 # only the provider you deploy needs to be present (extraction/factory.py selects by SATYUM_VLM_*).
 anthropic==0.112.0
 google-genai==2.10.0     # SATYUM_VLM_PROVIDER=gemini (default for POC; Claude key not required)
+groq==1.5.0              # SATYUM_VLM_*PROVIDER=groq (fallback lane) — was missing from this pin file,
+                          # so a fresh Railway install had the extractor but no SDK to run it with
+                          # (groq_extractor.py lazy-imports `groq`; installed locally, absent here).
+openai==2.44.0            # SATYUM_VLM_*PROVIDER=cloudflare/openai_compatible/openrouter/etc — the
+                          # OpenAI-compatible client (openai_compatible_extractor.py). Was previously
+                          # unpinned (a reproducibility gap of its own); pinned to the verified version.
 
 # --- Tier 2: document forensics / OCR / CV ---
 pikepdf==10.9.1
@@ -42,4 +48,3 @@ ImageHash==4.3.2
 SQLAlchemy==2.0.36
 psycopg[binary]==3.2.3
 # alembic==1.14.0   # schema migrations (the store create_all()s its one table on startup for now)
-openai

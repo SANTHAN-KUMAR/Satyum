@@ -193,7 +193,10 @@ class Settings(BaseSettings):
     # Fallback reader (ADR-004 §7 resilience / CLAUDE.md §4 graceful degradation): when the primary
     # reader is unavailable (quota/auth) or errors on a page, the Layer-2 analyzer transparently retries
     # with this reader before failing closed. Removes the single-cloud-VLM point of failure. "groq"
-    # (Llama-4 Scout vision) works today; "" → no fallback. Configured via SATYUM_VLM_FALLBACK_*.
+    # works today — factory.py defaults its model to "qwen/qwen3.6-27b" (Groq deprecated
+    # meta-llama/llama-4-scout-17b-16e-instruct for free/developer-tier use on 2026-06-17 in favor of
+    # this model and openai/gpt-oss-120b; set SATYUM_VLM_FALLBACK_MODEL explicitly only to override).
+    # "" → no fallback. Configured via SATYUM_VLM_FALLBACK_*.
     # NOTE: ALL `vlm_api_key` fields support comma-separated strings for automatic multi-key failover.
     vlm_fallback_provider: str = ""
     vlm_fallback_model: str = ""
