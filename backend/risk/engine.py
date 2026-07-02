@@ -306,12 +306,26 @@ def _agreeing_corroboration(signals: list[LayerSignal]) -> bool:
     return False
 
 
+# Pixel/font-object internal-consistency checks (copy_move: ORB+RANSAC clone detection;
+# font_layout: Z-score typography; pdf_font_consistency: embedded-subset-tag inconsistency) can only
+# ever flag something INSIDE the document's own rendered bytes. Once PAdES has verified the signature
+# covers the whole file (ADR-004 §Layer-1), those bytes are exactly what the issuer produced — a
+# forger cannot have pasted/re-typeset/re-embedded anything into them without breaking the signature,
+# which is already caught, separately and harder, by the tampered-provenance hard-reject path above.
+# So on the source-verified branch these three can only ever surface the issuer's OWN legitimate
+# repeated design elements or font choices (the documented Aadhaar/PAN copy-move false positive,
+# KNOWN_ISSUES.md) — never a true positive — and must not be allowed to contradict a verified document.
+# They stay fully active on the un-provenanced forensic path, where this reasoning doesn't apply.
+_BYTE_LEVEL_ONLY_SIGNALS: frozenset[str] = frozenset({"copy_move", "font_layout", "pdf_font_consistency"})
+
+
 def _contradiction_signals(signals: list[LayerSignal]) -> list[LayerSignal]:
     """Signals whose claims can contradict a verified document (ADR-004 §Layer-1 'claims still flow').
 
     Everything except the provenance signal itself, the PDF-only red flag (handled as a floor penalty),
-    and REVIEW-only soft signals (which can never reject). These are the corroboration/rule signals that
-    are allowed to pull a cryptographically-verified document down.
+    REVIEW-only soft signals (which can never reject), and the byte-level-only pixel/font checks (which
+    are structurally incapable of finding anything beyond the issuer's own document, see above). These
+    are the corroboration/rule signals that are allowed to pull a cryptographically-verified document down.
     """
     out: list[LayerSignal] = []
     for s in signals:
@@ -320,6 +334,8 @@ def _contradiction_signals(signals: list[LayerSignal]) -> list[LayerSignal]:
         if s.measurements.get("red_flag") == "pdf_only_when_pullable":
             continue
         if s.measurements.get("review_only") is True:
+            continue
+        if s.name in _BYTE_LEVEL_ONLY_SIGNALS:
             continue
         out.append(s)
     return out

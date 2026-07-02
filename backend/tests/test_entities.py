@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.claims import Claim, ClaimGraph, ClaimProvenance
 from app.contracts import AnalysisContext, Mode, SignalStatus
 from forensics.entities import (
     EntityExtractionAnalyzer,
@@ -17,6 +18,15 @@ from forensics.entities import (
     verhoeff_check_digit,
     verhoeff_validate,
 )
+
+
+def _name_claim_graph(name: str) -> ClaimGraph:
+    cg = ClaimGraph(doc_id="d1")
+    cg.add(Claim(
+        subject="applicant", predicate="holder_name", value=name, value_type="PersonName",
+        provenance=ClaimProvenance(doc_id="d1", confidence=0.95, source="vlm:test"),
+    ))
+    return cg
 
 
 def _valid_aadhaar(base: str = "23456789012") -> str:
@@ -175,6 +185,24 @@ def test_analyzer_publishes_entities_and_self_is_not_evaluated():
     ent = ctx.shared["entities"]
     assert ent.pan == "ABCDE1234F"
     assert ent.name == "JANE DOE"
+
+
+def test_vlm_name_reading_overrides_a_misread_ocr_name():
+    """Tesseract's segmentation-based OCR has a well-documented ligature confusion on printed names
+    ("rn" merging into what reads as "m" — a real "KARNALA" misread as "KAMALA"). The VLM's holistic
+    glyph reading is measurably more reliable for this failure mode, so when a claim graph is present
+    the VLM's holder_name must be preferred over the OCR-regex name EVEN WHEN OCR found something (not
+    just when OCR found nothing — the pre-fix behaviour). Bounded/safe: name is a soft corroborator
+    only (cross_document.py clamps any disagreement to REVIEW, never a hard verdict on its own).
+    Would FAIL against the pre-fix `if not entities.name` fallback, which kept the OCR misread."""
+    words = _ocr_words("Name: Kamala Vamsi Krishna")  # the OCR ligature misread
+    cg = _name_claim_graph("Karnala Vamsi Krishna")  # the VLM's correct read
+    ctx = AnalysisContext(
+        session_id="s", intake_mode=Mode.FILE, file_bytes=b"%PDF-1.4",
+        shared={"ocr": words, "claim_graph": cg},
+    )
+    EntityExtractionAnalyzer().analyze(ctx)
+    assert ctx.shared["entities"].name == "KARNALA VAMSI KRISHNA"
 
 
 def test_analyzer_not_applicable_on_camera_intake():

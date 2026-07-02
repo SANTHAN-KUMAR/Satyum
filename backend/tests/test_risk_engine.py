@@ -107,6 +107,38 @@ def test_verdict_band_agrees_with_displayed_score_at_threshold():
     assert ts.verdict == Verdict.REVIEW
 
 
+def test_byte_level_signals_dont_contradict_verified_provenance():
+    """copy_move / font_layout / pdf_font_consistency detect INTERNAL pixel/font-object clones —
+    physically incapable of finding anything beyond the issuer's own document once PAdES has verified
+    the whole file's bytes (a forger pasting/re-embedding would break the signature, caught separately
+    by the tampered-provenance hard-reject above). A high-suspicion copy_move finding on a verified
+    Aadhaar/PAN must NOT drag the score down (the documented false positive on legitimately repeated
+    UIDAI/Ashoka design elements, KNOWN_ISSUES.md) — while a genuine CONTENT contradiction (arithmetic)
+    still must. Would FAIL against the pre-fix engine, which averaged copy_move into the contradiction
+    mean regardless of signal type."""
+    verified = LayerSignal.valid("signature", 1, Mode.FILE, 0.0, 0.0, "ok",
+                                 measurements={"provenance": "verified", "method": "PAdES"})
+    clean = aggregate("s", Mode.FILE, [verified])
+
+    with_copy_move = aggregate("s", Mode.FILE, [verified, _sig_valid("copy_move", 0.87, weight=0.10)])
+    assert with_copy_move.trust_score == clean.trust_score
+
+    with_font = aggregate("s", Mode.FILE, [verified, _sig_valid("font_layout", 0.9, weight=0.15)])
+    assert with_font.trust_score == clean.trust_score
+
+    with_font_consistency = aggregate(
+        "s", Mode.FILE, [verified, _sig_valid("pdf_font_consistency", 0.8, weight=0.10)]
+    )
+    assert with_font_consistency.trust_score == clean.trust_score
+
+    # A genuine content contradiction (arithmetic) still pulls a verified document down — the fix
+    # narrows WHICH signals can contradict provenance, it doesn't disable the mechanism entirely.
+    with_arithmetic = aggregate(
+        "s", Mode.FILE, [verified, _sig_valid("arithmetic_consistency", 0.87, weight=0.40)]
+    )
+    assert with_arithmetic.trust_score < clean.trust_score
+
+
 def test_pdf_only_red_flag_penalises_even_when_signature_verified():
     verified = LayerSignal.valid("signature", 1, Mode.FILE, 0.0, 0.0, "ok",
                                  measurements={"provenance": "verified", "method": "PAdES"})

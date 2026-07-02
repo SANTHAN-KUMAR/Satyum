@@ -183,3 +183,23 @@ matching `CrossDocumentGraph`'s visual language and granularity exactly. The old
 derivation stays in the component as a defensive fallback only (a case snapshot with no `comparisons`
 data), never as the primary path. Verified: `pytest tests/test_cases_api.py tests/test_case_store.py` (8
 passed), `ruff check` clean, frontend typecheck/lint/build clean.
+
+### 6.3 Copilot: stale-context confusion + re-fetch-on-reopen (fixed)
+Two real bugs surfaced in use: (1) `GlobalCopilotDrawer` conditionally rendered `CopilotPanel` only while
+open, so every close/reopen unmounted it and threw away the loaded narrative + chat history, forcing a
+fresh `/api/interpret/narrative` call each time (the "stuck spinner" on reopen). Fixed by keeping the
+panel permanently mounted and toggling visibility with a CSS transform instead — `CopilotPanel`'s own
+state (and therefore the fetched narrative) now only resets when the evidence pack itself changes, not on
+open/close. (2) On Consortium/Master Model — pages with no document-evidence-pack concept at all — the
+drawer silently kept discussing the last analyzed document with no indication *why*, reading as if the
+copilot were confused about which page it's on. Fixed with an explicit banner naming the current page and
+stating plainly that this page has no evidence pack of its own, rather than either faking page-aware
+reasoning or leaving the mismatch unexplained.
+
+**Recorded debt, NOT built here** (needs a backend change, not fakeable frontend-only per CLAUDE.md §9):
+a copilot that can actually reason about Consortium ring evidence, or about a whole case's accumulated
+documents rather than just the latest one, needs `/api/interpret/*` to accept a different context shape
+per page (ring evidence, a case-level claims summary) instead of being hard-scoped to one document's
+`EvidencePack`. The temperature is already 0.0 server-side (`interpretability/mcp_client.py:84`), so a
+given evidence pack's narrative is deterministic — the "inconsistent" complaint was the re-fetch-on-reopen
+bug above and this page-context gap, not model nondeterminism.

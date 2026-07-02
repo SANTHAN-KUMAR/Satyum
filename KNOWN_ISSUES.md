@@ -107,3 +107,62 @@ This is a compounding failure between Layer 2 (VLM Extraction) and Layers 4/5 (D
 - **Aadhaar context-gate (Implemented, fixes 5.2).** `forensics/entities.py` no longer routes *every* 12-digit number through the UIDAI Verhoeff checksum. A number is treated as an Aadhaar **only** when it carries Aadhaar context — the canonical UIDAI 4-4-4 spaced print grouping, *or* a nearby `Aadhaar`/`UID`/`VID`/`आधार` label on the same line. A bare bank Customer ID / CIF / account number therefore produces **no** `aadhaar_invalid` forgery signal. Genuine Aadhaar detection (spaced, or labelled) is preserved. Discrimination tests in `tests/test_entities.py`.
 - **Issuer masthead priority (Implemented, fixes 5.3).** `verification/provenance.detect_issuer` now returns the issuer whose name appears **earliest** in the document (the masthead), not whichever registry key was checked first. A genuine Canara statement carrying an incidental `UPI/HDFC BANK/…` transaction line is correctly labelled **Canara**, not HDFC. Test in `tests/test_red_flag.py`.
 - **Math imbalance from partial extraction (5.1) — mitigated (see Issue #4).** The arithmetic engine now abstains when extraction is incomplete and types the failure severity instead of asserting tampering on every break.
+
+---
+
+## 6. Byte-Level Pixel/Font Forensics Contradicting an Already-Verified Signature
+
+**Date Discovered:** 2026-07-02
+
+**Symptom:**
+A genuinely valid, digitally signed Aadhaar PDF (PAdES verified, chain to a pinned trust anchor) still scored REVIEW (~83) instead of APPROVED. The `copy_move` (spatial clone) analyzer flagged an 87%-suspicion "coherent clone" on the Aadhaar's own UIDAI logo / Ashoka emblem / security watermark — legitimately repeated design elements, not tampering (see Issue #5's sibling false-positive class). This compounded with a *separate* deployment gap (no VLM configured, so `doc_type` stayed `unclassified` and `copy_move`'s existing `AADHAAR`/`PAN_CARD` exemption in `forensics/copy_move.py` never got the chance to fire) — but even with that exemption working, the deeper issue was architectural, not just missing classification.
+
+**Root Cause:**
+`risk/engine.py`'s provenance-verified scoring path deliberately lets "contradiction signals" pull a cryptographically verified document's score down below its 99-point floor — by design (ADR-004 §Layer-1: a verified signature proves byte-authenticity, not claim-truthfulness; e.g. a signed statement can still carry income that contradicts the ITR). But `_contradiction_signals()` selected this set as an unfiltered catch-all — "everything except provenance itself, the PDF-only flag, and REVIEW-only signals" — with no awareness that some Tier-2 signals (`copy_move`, `font_layout`, `pdf_font_consistency`) only ever inspect the document's own rendered pixels / embedded font objects. Once PAdES has verified the signature covers the *entire* file, those bytes are exactly what the issuer produced — a forger cannot have pasted, re-typeset, or re-embedded anything into them without breaking the signature, which is *already* caught, harder and earlier, by the tampered-provenance hard-reject branch. So on the source-verified path these three analyzers are structurally incapable of a true positive — they can only ever surface the issuer's own legitimate repeated design elements or font choices, and letting them contradict a verified document was punishing genuine documents for a signal that can't mean what the scoring engine was treating it as meaning.
+
+**Resolution (Implemented):**
+- `risk/engine.py` now excludes `copy_move`, `font_layout`, and `pdf_font_consistency` from `_contradiction_signals()` — they remain fully active (unchanged weight/behavior) on the un-provenanced forensic path, where a real post-creation edit *can* still be caught by them; they are simply structurally ineligible to drag down a document whose signature has already proven the bytes untouched.
+- Content-truthfulness signals (arithmetic, cross-document corroboration, rule packs) are unaffected and continue to be able to pull a verified document down — the fix narrows *which* signals can contradict provenance, it does not disable the mechanism.
+- Discrimination test added (`tests/test_risk_engine.py::test_byte_level_signals_dont_contradict_verified_provenance`): a verified document with a high-suspicion `copy_move`/`font_layout`/`pdf_font_consistency` finding now scores identically to the same document with none of those signals present, while a genuine content contradiction (`arithmetic_consistency`) still measurably lowers the score. Would FAIL against the pre-fix engine.
+- **Separately, and still relevant:** the `AADHAAR`/`PAN_CARD` doc-type exemption in `forensics/copy_move.py` only fires when the VLM has classified the document — deploying without `SATYUM_VLM_PROVIDER` / `SATYUM_VLM_API_KEY` configured leaves every document `unclassified` and cascades into Issue #1's symptoms too. That remains a deployment-configuration requirement, not a code gap.
+
+---
+
+## 7. OCR Ligature Misread on Identity Names ("KARNALA" → "KAMALA")
+
+**Date Discovered:** 2026-07-02
+
+**Symptom:**
+A genuine Aadhaar's printed name "KARNALA VAMSI KRISHNA" was extracted as "KAMALA VAMSI KRISHNA" and
+then flagged a cross-document name mismatch against the applicant's ITR (soft signal, REVIEW — never a
+hard reject, so no forgery was laundered and no genuine applicant was hard-rejected; the system was
+already behaving fail-safe even with the wrong text).
+
+**Root Cause:**
+`forensics/entities.py`'s `EntityExtractionAnalyzer` sources the `name` field from Tesseract OCR text via
+a label-anchored regex. Tesseract's segmentation-based character recognition has a well-documented
+ligature-confusion failure mode on printed text: adjacent "r" + "n" can visually merge into what reads as
+a single "m" (KAR-NALA → KA-MALA). Two things let this reach the UI unfixed:
+1. **No cross-read consensus for text fields.** CLAUDE.md's "every figure is box-grounded and
+   independently re-read" discipline (`forensics/extraction/cross_read.py`) applies ONLY to numeric
+   claims — a name is extracted once, by one engine, with no independent re-read at all.
+2. **The existing VLM fallback only fired on an EMPTY OCR read** (`if not entities.name:` before this
+   fix) — so even when a VLM claim graph was available with the correct "holder_name" reading, it was
+   never consulted once Tesseract had produced *any* non-empty (even wrong) name.
+
+**Resolution (Implemented):**
+- `forensics/entities.py`'s claim-graph supplementation now prefers the VLM's `holder_name`/`name`
+  reading over the OCR-regex extraction whenever a claim graph is present — not just when OCR found
+  nothing. A vision-language model reads printed glyphs holistically and is measurably more reliable
+  than Tesseract's segmentation-based recognition for this specific confusion class.
+- **Why this is safe, not a new fake-signal risk (§3.1):** `name` is a SOFT corroborator only —
+  `forensics/cross_document.py`'s `_names_match`/severity clamp means a name disagreement can never
+  single-handedly REJECT or APPROVE a document, only raise it into the REVIEW band for a human. Preferring
+  a different (real, VLM-produced) reading changes what a reviewer sees, not the strength of any verdict.
+- Discrimination test added (`tests/test_entities.py::test_vlm_name_reading_overrides_a_misread_ocr_name`):
+  an OCR name and a disagreeing VLM name both present → the VLM's reading wins. Would FAIL against the
+  pre-fix `if not entities.name` fallback.
+- **Honest bound, still open:** this only helps once a VLM is actually configured (`SATYUM_VLM_PROVIDER`
+  / `SATYUM_VLM_API_KEY` — see Issue #6). With no VLM, name extraction remains single-engine Tesseract
+  OCR with no independent re-read; a genuine full text-field cross-read consensus (matching the numeric
+  discipline) is a larger, unbuilt feature, not attempted here to avoid overclaiming.

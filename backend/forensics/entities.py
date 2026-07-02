@@ -285,15 +285,25 @@ class EntityExtractionAnalyzer:
         # Supplement regex entities with VLM extracted claims if available (ADR-004 identity fallback)
         cg = ctx.shared.get("claim_graph")
         if cg:
-            # Map holder_name (from ID cards/statements) to the canonical 'name' entity if regex missed it
-            if not entities.name:
-                name_claim = cg.first("holder_name") or cg.first("name")
-                if name_claim and name_claim.value:
+            # Prefer the VLM's holder_name/name reading over the OCR-regex one whenever the VLM ran —
+            # NOT just when OCR found nothing. Tesseract's segmentation-based character recognition is
+            # prone to a well-documented ligature confusion on printed names ("rn" merging into what
+            # reads as "m" — e.g. a real "KARNALA" misread as "KAMALA"); a vision-language model reads
+            # the glyphs holistically and is measurably more reliable for this specific failure mode.
+            # Bounded, honest trade: "name" is a SOFT corroborator only (cross_document.py clamps any
+            # name disagreement to the REVIEW band and it can never single-handedly reject or approve),
+            # so preferring the VLM's read here cannot manufacture a false hard verdict either way — it
+            # only changes which spelling a human reviewer sees. (Numeric claims stay OCR-cross-read
+            # against the VLM per CLAUDE.md §3.1; this does not change that discipline.)
+            name_claim = cg.first("holder_name") or cg.first("name")
+            if name_claim and name_claim.value:
+                vlm_name = normalise_name(name_claim.value)
+                if vlm_name:
                     # Apply the same normalisation so the cross-document matching works identically
                     entities = ExtractedEntities(
                         pan=entities.pan, aadhaar=entities.aadhaar, aadhaar_invalid=entities.aadhaar_invalid,
                         ifsc=entities.ifsc, account_number=entities.account_number,
-                        name=normalise_name(name_claim.value) or entities.name,
+                        name=vlm_name,
                         dob=entities.dob
                     )
             # We could do the same for PAN/DOB if needed, but the bug specifically requested holder_name.
