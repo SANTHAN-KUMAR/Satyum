@@ -207,3 +207,44 @@ returned `hdfc`.
   previously `('hdfc', 'document')`).
 - 53 tests pass across `test_red_flag.py` + `test_entities.py` + `test_sources_api.py` + `test_api.py`;
   `ruff check` clean.
+
+---
+
+## 9. Gemini 2.5 Thinking Tokens Truncating Dense-Page Extraction ("response was not valid JSON")
+
+**Date Discovered:** 2026-07-02
+
+**Symptom:** Uploading a multi-page (7-page) bank statement produced repeated Railway log lines —
+`extraction: reader vlm:gemini-2.5-flash errored, trying fallback: vlm:gemini-2.5-flash: response was
+not valid JSON` — across every configured Gemini key, eventually exhausting the whole VLM chain.
+
+**Root Cause:** Gemini 2.5 models "think" by default, and thinking tokens are drawn from the **same**
+`max_output_tokens` budget as the final answer (a real, current Gemini API behavior — confirmed against
+Google's own developer forum reports, not assumed). `GeminiVLMExtractor.extract()`
+(`forensics/extraction/gemini_extractor.py`) never set `max_output_tokens` or `thinking_config` at all,
+so Gemini used its own default split. A page with many transaction rows produces a large structured-JSON
+reply (a bounding box + confidence per extracted cell); on a denser page, internal reasoning can consume
+enough of the (unbounded, default) budget that the response is truncated or empty before any JSON is
+written — surfacing as an opaque "not valid JSON" with no indication that a token limit, not a malformed
+reply, was the actual cause.
+
+**Resolution (Implemented):**
+- `extract()` now sends an explicit `max_output_tokens=settings.vlm_max_tokens` (already the tuned
+  8192-token budget the other providers use) and `thinking_config=ThinkingConfig(thinking_budget=0)`.
+  This task is pure box-grounded **transcription** with no judgement call to make (`SYSTEM_PROMPT`
+  explicitly forbids computing/correcting/reconciling) — disabling thinking costs nothing here and
+  guarantees the full budget goes to the actual output.
+- Added a `finish_reason` check: if a future response is still cut off (e.g. an unusually dense page
+  exceeds even the disabled-thinking budget), the error now says so explicitly
+  (`"response cut off before completion (finish_reason=MAX_TOKENS) — likely hit the output token
+  limit on a dense page"`) instead of surfacing as a generic JSON-parse mystery.
+- `forensics/extraction/factory.py`'s Gemini branch now passes `max_tokens=settings.vlm_max_tokens`,
+  matching how the Anthropic/Groq/Cloudflare branches already did.
+- Discrimination tests added (`tests/test_vlm_extraction.py`): one proves the real config sent to the
+  API includes both fields; one proves a `MAX_TOKENS` finish reason now fails with a diagnosable
+  message instead of an opaque one. Both would FAIL against the pre-fix extractor.
+- **Considered and rejected**: falling back to Gemini 1.5 Flash on error. Verified live — Gemini 1.0
+  and 1.5 are fully shut down (404 on every request); 2.0 Flash is also being retired. Swapping models
+  would not have fixed this (the truncation is a config gap, not a model-quality issue), and would have
+  traded one dead end for another.
+- 33/33 pass in `test_vlm_extraction.py`, 52/52 across the broader related suites, `ruff check` clean.

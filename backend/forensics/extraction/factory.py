@@ -71,6 +71,7 @@ def _make_extractors(
                 model=model or "gemini-2.5-flash",
                 api_key=api_key,
                 timeout=settings.vlm_timeout_seconds,
+                max_tokens=settings.vlm_max_tokens,
                 handled_scripts=handled_scripts,
             )
         elif provider == "groq":

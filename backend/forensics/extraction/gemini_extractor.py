@@ -60,12 +60,14 @@ class GeminiVLMExtractor(VLMExtractor):
         api_key: str | None,
         temperature: float = 0.0,
         timeout: float = 60.0,
+        max_tokens: int = 8192,
         handled_scripts: frozenset[str] = frozenset({"latin", "indic"}),
     ) -> None:
         self.model = model
         self._api_key = (api_key or "").strip()
         self._temperature = temperature
         self._timeout = timeout
+        self._max_tokens = max_tokens
         self._handled_scripts = handled_scripts
         self._prompt_hash = prompt_fingerprint(model)
         self._client: Any = None
@@ -131,6 +133,15 @@ class GeminiVLMExtractor(VLMExtractor):
             temperature=self._temperature,
             response_mime_type="application/json",
             http_options=types.HttpOptions(timeout=int(self._timeout * 1000)),
+            max_output_tokens=self._max_tokens,
+            # Gemini 2.5+ models think by default, and thinking tokens are drawn from the SAME
+            # max_output_tokens budget as the final answer — with no cap, a dense page (many
+            # transaction rows -> a large structured JSON reply) can have its entire token budget
+            # consumed by internal reasoning before any JSON is emitted, truncating or emptying the
+            # response ("response was not valid JSON" / "empty response"). This task is pure
+            # box-grounded TRANSCRIPTION with no judgement (SYSTEM_PROMPT), so reasoning tokens buy
+            # nothing here — disable thinking outright so the full budget goes to the actual output.
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
         contents = [
             types.Part.from_bytes(data=page.png_bytes, mime_type=_IMAGE_MIME_TYPE),
@@ -153,6 +164,18 @@ class GeminiVLMExtractor(VLMExtractor):
             raise VLMExtractionError(f"{self.name}: API error HTTP {code}") from exc
         except Exception as exc:  # noqa: BLE001 — fail-closed on anything unexpected
             raise VLMExtractionError(f"{self.name}: unexpected failure: {type(exc).__name__}") from exc
+
+        # Diagnose a token-budget truncation explicitly (finish_reason != STOP, e.g. "MAX_TOKENS")
+        # instead of letting it surface as an opaque "not valid JSON" further down — this is exactly
+        # the failure mode max_output_tokens/thinking_config above are meant to prevent, so a future
+        # recurrence (an unusually dense page) should say so plainly, not look like a parsing bug.
+        candidates = getattr(response, "candidates", None) or []
+        finish_reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+        if finish_reason is not None and str(finish_reason).upper() not in ("STOP", "FINISHREASON.STOP"):
+            raise VLMExtractionError(
+                f"{self.name}: response cut off before completion (finish_reason={finish_reason}) — "
+                "likely hit the output token limit on a dense page"
+            )
 
         text = getattr(response, "text", None)
         if not text:

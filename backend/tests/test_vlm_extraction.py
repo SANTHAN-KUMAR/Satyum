@@ -460,6 +460,53 @@ def test_gemini_prompt_carries_schema_and_no_expected_values():
     assert "JSON Schema" in prompt and "do not compute" in prompt.lower()
 
 
+def test_gemini_sets_max_output_tokens_and_disables_thinking():
+    """Gemini 2.5's thinking tokens draw from the SAME max_output_tokens budget as the JSON reply —
+    left unbounded, a dense page (many transaction rows -> a large structured reply, e.g. a 7-page
+    bank statement) can have its entire budget consumed by internal reasoning before any JSON is
+    emitted, truncating/emptying the response (the real-world 'response was not valid JSON' error).
+    Verifies extract() sends an explicit max_output_tokens AND a disabled thinking budget. Would FAIL
+    against the pre-fix config, which set neither field."""
+    from forensics.extraction.gemini_extractor import GeminiVLMExtractor
+    from forensics.extraction.interface import PageImage
+
+    ex = GeminiVLMExtractor(model="gemini-2.5-flash", api_key="k", max_tokens=8192)
+    captured: dict = {}
+
+    class _FakeModels:
+        def generate_content(self, *, model, contents, config):
+            captured["config"] = config
+            return SimpleNamespace(
+                text='{"doc_type":"BANK_STATEMENT","fields":[]}',
+                candidates=[SimpleNamespace(finish_reason="STOP")],
+            )
+
+    ex._ensure_client = lambda: SimpleNamespace(models=_FakeModels())
+    ex.extract(PageImage(png_bytes=b"x", width=1, height=1))
+
+    cfg = captured["config"]
+    assert cfg.max_output_tokens == 8192
+    assert cfg.thinking_config.thinking_budget == 0
+
+
+def test_gemini_truncated_response_raises_a_diagnosable_error():
+    """A finish_reason other than STOP (e.g. MAX_TOKENS, a token-budget cutoff) must fail with an
+    explicit, diagnosable error naming the cause — not surface as a generic 'not valid JSON' the way
+    a truncated response did before this fix (which made the real cause invisible in logs)."""
+    from forensics.extraction.gemini_extractor import GeminiVLMExtractor
+    from forensics.extraction.interface import PageImage, VLMExtractionError
+
+    ex = GeminiVLMExtractor(model="gemini-2.5-flash", api_key="k")
+
+    class _FakeModels:
+        def generate_content(self, *, model, contents, config):
+            return SimpleNamespace(text="", candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")])
+
+    ex._ensure_client = lambda: SimpleNamespace(models=_FakeModels())
+    with pytest.raises(VLMExtractionError, match="finish_reason"):
+        ex.extract(PageImage(png_bytes=b"x", width=1, height=1))
+
+
 # =================================================================================================
 # 7. Analyzer-level: honest gate + extraction provenance
 # =================================================================================================
