@@ -12,30 +12,38 @@ const PAGE_LABEL: Record<string, string> = {
 };
 
 /** True on pages that have no document-evidence-pack concept at all — the backend's
- * /api/interpret/narrative + /ask only ever reason over a single document's EvidencePack, so on
+ * /api/interpret/narrative + /ask only ever reason over document evidence packs, so on
  * these pages the copilot is honestly showing PRIOR context, not this page's content. */
 function pageHasNoEvidenceConcept(pathname: string): boolean {
   return pathname.startsWith("/consortium") || pathname.startsWith("/model");
 }
 
+function scopeLabel(scope: ReturnType<typeof useCopilotContext>["scope"]): string | null {
+  if (!scope) return null;
+  if (scope.kind === "document") return `Analyzing ${scope.label}`;
+  return `Case: ${scope.documents.length} document(s) in scope`;
+}
+
 /**
  * The omnipresent Copilot — a floating toggle + slide-in drawer mounted once in AppShell, so it
  * survives navigation between Console / Case / Consortium / Master model instead of being torn down
- * and rebuilt per page (the "state gets destroyed" problem). It always shows the LAST real evidence
- * pack registered via CopilotContext, regardless of which page put it there.
+ * and rebuilt per page (the "state gets destroyed" problem). It always shows the LAST real scope
+ * registered via CopilotContext — either a single document (Console) or a whole application case's
+ * accumulated documents (Case page) — regardless of which page put it there.
  *
  * The panel stays mounted at all times (visibility toggled with CSS, not conditional rendering) so
  * closing and reopening the drawer does NOT discard the loaded narrative or chat history and does NOT
- * re-fetch — CopilotPanel's own state only resets when the evidence pack itself changes. On a page with
- * no document-evidence-pack concept (Consortium, Master Model), a banner says so explicitly instead of
+ * re-fetch — CopilotPanel's own state only resets when the scope itself changes (a different document,
+ * a different case, or the case's document set changing — see copilotScopeKey). On a page with no
+ * document-evidence-pack concept (Consortium, Master Model), a banner says so explicitly instead of
  * silently discussing a stale document as if it were this page's content — the backend has no way to
  * reason about ring/network data today, so faking that here would violate CLAUDE.md §9.
  */
 export function GlobalCopilotDrawer() {
-  const { evidencePack, sourceLabel, open, setOpen } = useCopilotContext();
+  const { scope, open, setOpen } = useCopilotContext();
   const { pathname } = useLocation();
   const pageLabel = PAGE_LABEL[pathname] ?? pathname;
-  const offTopic = pageHasNoEvidenceConcept(pathname) && evidencePack != null;
+  const offTopic = pageHasNoEvidenceConcept(pathname) && scope != null;
 
   return (
     <>
@@ -50,7 +58,7 @@ export function GlobalCopilotDrawer() {
       >
         {open ? <X size={18} aria-hidden="true" /> : <Bot size={18} aria-hidden="true" />}
         {open ? "Close" : "Copilot"}
-        {!open && evidencePack && <span className="h-1.5 w-1.5 rounded-full bg-white/90" aria-hidden="true" />}
+        {!open && scope && <span className="h-1.5 w-1.5 rounded-full bg-white/90" aria-hidden="true" />}
       </button>
 
       <div
@@ -66,9 +74,7 @@ export function GlobalCopilotDrawer() {
         <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
           <div>
             <p className="text-sm font-semibold text-slate-100">Underwriter copilot</p>
-            <p className="text-xs text-slate-500">
-              {sourceLabel ? `Analyzing ${sourceLabel}` : "No document in scope"}
-            </p>
+            <p className="text-xs text-slate-500">{scopeLabel(scope) ?? "No document in scope"}</p>
           </div>
           <button onClick={() => setOpen(false)} className="btn-ghost !px-2 !py-1.5" aria-label="Close copilot">
             <X size={16} />
@@ -78,18 +84,18 @@ export function GlobalCopilotDrawer() {
         {offTopic && (
           <div className="border-b border-hairline bg-verdict-review-soft px-4 py-2.5 text-xs text-verdict-review">
             You're on <strong>{pageLabel}</strong>, which has no document evidence pack of its own — the
-            copilot below is still discussing the last document it analyzed ({sourceLabel}), not this
+            copilot below is still discussing its last real context ({scopeLabel(scope)}), not this
             page. Cross-bank/ring reasoning isn't wired into the copilot yet.
           </div>
         )}
 
         <div className="flex-1 overflow-y-auto p-4">
-          {evidencePack ? (
-            <CopilotPanel evidencePack={evidencePack} />
+          {scope ? (
+            <CopilotPanel scope={scope} />
           ) : (
             <div className="rounded-xl border border-dashed border-hairline p-5 text-center text-sm text-slate-500">
               Nothing to analyze yet. Verify a document or add one to a case — the copilot activates
-              on the real evidence pack it produces and stays available as you move around the app.
+              on the real evidence it produces and stays available as you move around the app.
             </div>
           )}
         </div>

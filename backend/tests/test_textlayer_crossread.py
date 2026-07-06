@@ -200,6 +200,53 @@ def test_build_multi_renumbers_transactions_and_chains_across_pages():
     assert f1.status.value == "PASS"  # 0 +5000 →5000; 5000 −1000 →4000 across the page break
 
 
+def test_build_multi_renumbers_by_position_when_reader_seq_is_gapped_or_nonzero():
+    """A reader's per-page ``seq`` is untrusted input (CLAUDE.md §3.1/§5.4) — it need not be zero-based
+    or gapless. Observed in practice: a page came back numbered [2, 7] instead of [0, 1]. Trusting
+    ``max(seq)`` to size the next page's offset would inflate it by 6, silently dropping 6 phantom rows
+    from the global sequence and misaligning every later page — exactly the multi-page consistency bug
+    this test guards against. The fix renumbers by list position, so the global sequence is always
+    contiguous regardless of what the model reports.
+    """
+    p1_words = (((0.40, 0.10, 0.05, 0.02), "0.00"),
+                ((0.90, 0.50, 0.05, 0.02), "5,000.00"),
+                ((0.80, 0.50, 0.05, 0.02), "5,000.00"),
+                ((0.90, 0.60, 0.05, 0.02), "4,000.00"),
+                ((0.70, 0.60, 0.05, 0.02), "1,000.00"))
+    p2_words = (((0.90, 0.50, 0.05, 0.02), "3,500.00"),
+                ((0.70, 0.50, 0.05, 0.02), "500.00"))
+    raw1 = RawExtraction(
+        doc_type="BANK_STATEMENT",
+        fields=[ExtractedField(predicate="opening_balance", value="0.00", confidence=0.95,
+                               bbox=(0.40, 0.10, 0.05, 0.02))],
+        # two rows on page 1, cleanly zero-based
+        transactions=[
+            ExtractedTransaction(seq=0, credit=_cell("5000.00", (0.80, 0.50, 0.05, 0.02)),
+                                  running_balance=_cell("5000.00", (0.90, 0.50, 0.05, 0.02))),
+            ExtractedTransaction(seq=1, debit=_cell("1000.00", (0.70, 0.60, 0.05, 0.02)),
+                                  running_balance=_cell("4000.00", (0.90, 0.60, 0.05, 0.02))),
+        ],
+        model_id="m", prompt_hash="p",
+    )
+    raw2 = RawExtraction(
+        doc_type="BANK_STATEMENT",
+        # page 2's reader numbered its ONE row "7" instead of "0" — hostile/malformed per-page numbering
+        transactions=[
+            ExtractedTransaction(seq=7, debit=_cell("500.00", (0.70, 0.50, 0.05, 0.02)),
+                                  running_balance=_cell("3500.00", (0.90, 0.50, 0.05, 0.02))),
+        ],
+        model_id="m", prompt_hash="p",
+    )
+    builder = ClaimGraphBuilder(_ensemble(), arithmetic_abs_tolerance=settings.arithmetic_abs_tolerance)
+    graph = builder.build_multi([(raw1, _page(p1_words)), (raw2, _page(p2_words))], doc_id="d", source="m")
+    seqs = sorted({c.index for c in graph.claims
+                   if c.subject.startswith("transaction_") and c.index is not None})
+    assert seqs == [0, 1, 2]  # contiguous — NOT [0, 1, 7], no phantom gap
+    domain, results = engine.run(graph, min_confidence=0.5, tolerance=1.0)
+    f1 = next(r for r in results if r.rule_id == "F1")
+    assert f1.status.value == "PASS"  # the full genuine chain reconciles once nothing is dropped
+
+
 def test_build_multi_dedupes_repeated_header_field():
     words = (((0.40, 0.10, 0.05, 0.02), "0.00"),)
     raw1 = RawExtraction(doc_type="BANK_STATEMENT",

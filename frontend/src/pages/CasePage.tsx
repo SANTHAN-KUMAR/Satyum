@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ApiError, verifyDocument } from "@/api/client";
-import { createCase, getCase, type CaseView } from "@/api/cases";
-import { useCopilotContext } from "@/lib/CopilotContext";
+import { createCase, getCase, getCaseEvidence, type CaseView } from "@/api/cases";
+import { useCopilotContext, type CopilotDocument } from "@/lib/CopilotContext";
 import { CaseIdentityMatrix } from "@/components/evidence/CaseIdentityMatrix";
 
 /**
@@ -9,20 +9,35 @@ import { CaseIdentityMatrix } from "@/components/evidence/CaseIdentityMatrix";
  * one at a time (PAN, bank statement, Form-16, Aadhaar). Each document is verified and its extracted
  * identity claims accrue into the case, so the cross-document corroboration graph strengthens as more
  * documents arrive — two documents that agree corroborate one identity, a third strengthens it, and one
- * that disagrees on a hard identifier (PAN / Aadhaar / account) flags identity fraud. Only the extracted
- * claims and verdicts are stored, never the document bytes or imagery.
+ * that disagrees on a hard identifier (PAN / Aadhaar / account) flags identity fraud.
+ *
+ * The Copilot's context here is the WHOLE case, not just the document most recently added: every time
+ * the case's documents change, this page re-fetches every document's full evidence pack (GET
+ * /api/cases/{id}/evidence) and registers the complete set with CopilotContext.setCaseContext, so the
+ * copilot can answer a question about the bank statement while the underwriter is looking at the PAN,
+ * and doesn't forget it when a third document is added.
  */
 export function CasePage() {
   const [current, setCurrent] = useState<CaseView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { setCopilotContext } = useCopilotContext();
+  const { setCaseContext } = useCopilotContext();
+
+  const refreshCopilotContext = async (caseId: string) => {
+    const evidence = await getCaseEvidence(caseId);
+    const documents: CopilotDocument[] = evidence.documents
+      .filter((d): d is typeof d & { evidence_pack: NonNullable<typeof d.evidence_pack> } => d.evidence_pack != null)
+      .map((d) => ({ label: d.label, pack: d.evidence_pack }));
+    setCaseContext(caseId, documents);
+  };
 
   const start = async () => {
     setBusy(true);
     setError(null);
     try {
-      setCurrent(await createCase());
+      const c = await createCase();
+      setCurrent(c);
+      setCaseContext(c.case_id, []); // a freshly-opened case: the copilot should say so, not show stale context
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not open a case.");
     } finally {
@@ -35,12 +50,9 @@ export function CasePage() {
     setBusy(true);
     setError(null);
     try {
-      // verifyDocument returns this document's own full TrustScore/evidence pack even inside a case —
-      // that's real data, so it becomes the global Copilot's active context immediately (not the whole
-      // case, which has no evidence-pack-shaped object of its own — see CLAUDE.md §9 on not fabricating).
-      const result = await verifyDocument(file, { caseId: current.case_id });
-      setCopilotContext(result.evidence_pack, file.name);
+      await verifyDocument(file, { caseId: current.case_id });
       setCurrent(await getCase(current.case_id)); // refresh: the graph has re-run over all documents
+      await refreshCopilotContext(current.case_id); // refresh: the copilot now sees this document too
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not add the document.");
     } finally {

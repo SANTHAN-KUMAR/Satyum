@@ -89,8 +89,18 @@ def _active_challenge_signal(result_msg: dict) -> dict:
     return matches[0]
 
 
+def _arm(ws) -> dict:
+    """Signal readiness for the CURRENT challenge — this is what starts the real TTL clock and
+    unblocks frame buffering (frames sent before arming are honestly ignored, never scored, so a
+    cooperating user is never racing a deadline that started before they could act on it)."""
+    ws.send_json({"type": "start_attempt"})
+    msg = ws.receive_json()
+    assert msg["type"] == "armed"
+    return msg
+
+
 def _run(frames_for) -> tuple[dict, dict]:
-    """Connect, read the challenge, build the caller's frames for that command, score, return.
+    """Connect, read the challenge, arm the attempt, build the caller's frames, score, return.
 
     ``frames_for(axis, magnitude_deg)`` produces the streamed sequence; returns
     ``(active_challenge_signal, result_message)``.
@@ -98,6 +108,7 @@ def _run(frames_for) -> tuple[dict, dict]:
     client = TestClient(_make_app())
     with client.websocket_connect("/ws/verify") as ws:
         challenge = ws.receive_json()
+        _arm(ws)
         frames = frames_for(challenge["axis"], float(challenge["magnitude_deg"]))
         result = _stream_and_collect(ws, frames)
     return _active_challenge_signal(result), result
@@ -159,3 +170,92 @@ def test_ws_compliant_beats_static_would_fail_against_a_constant():
         lambda _axis, _mag: static_challenge_sequence(n=300, steps=_FRAMES_TO_AUTO_SCORE)
     )
     assert compliant["suspicion"] < static["suspicion"]
+
+
+# --- in-session retry (a failed/unmet attempt gets a bounded chance to try again) --------------
+
+def test_ws_frames_before_arming_are_ignored_not_scored():
+    """Frames sent before `start_attempt` don't count toward anything — no ticking clock starts
+    until the client explicitly says it's ready (the fix for "the timer started before I could act
+    on the instruction")."""
+    client = TestClient(_make_app())
+    with client.websocket_connect("/ws/verify") as ws:
+        challenge = ws.receive_json()
+        # Send a few frames without arming first — these must be silently ignored (no tier_status,
+        # no result), proving the buffer + TTL clock haven't started yet.
+        for frame in static_challenge_sequence(n=300, steps=3):
+            ws.send_json(_frame_message(frame))
+        _arm(ws)
+        # Now the SAME challenge is scored fresh from arming, not from the ignored pre-arm frames.
+        frames = challenge_sequence(challenge["axis"], float(challenge["magnitude_deg"]), n=300,
+                                     steps=_FRAMES_TO_AUTO_SCORE)
+        result = _stream_and_collect(ws, frames)
+        sig = _active_challenge_signal(result)
+        assert sig["status"] == "VALID" and sig["suspicion"] <= 0.1, sig["reason"]
+
+
+def test_ws_retry_issues_a_fresh_challenge_on_the_same_connection():
+    """A failed attempt does NOT close the socket — the client can request a new challenge in place,
+    and the server mints a genuinely fresh nonce (never reissues the same one, §10 anti-replay)."""
+    client = TestClient(_make_app())
+    with client.websocket_connect("/ws/verify") as ws:
+        first = ws.receive_json()
+        assert first["retries_remaining"] == 3
+        _arm(ws)
+
+        frames = static_challenge_sequence(n=300, steps=_FRAMES_TO_AUTO_SCORE)
+        result = _stream_and_collect(ws, frames)
+        assert _active_challenge_signal(result)["suspicion"] >= 0.7  # unmet -> failed
+
+        ws.send_json({"type": "retry"})
+        second = ws.receive_json()
+        assert second["type"] == "challenge"
+        assert second["challenge_id"] != first["challenge_id"]  # a fresh nonce, never reused
+        assert second["retries_remaining"] == 2
+
+
+def test_ws_retry_lets_a_corrected_attempt_pass_and_end_the_session():
+    """After a retry, a compliant attempt against the NEW challenge's own axis/magnitude passes and
+    the session concludes normally (no extra retry needed once genuinely satisfied)."""
+    client = TestClient(_make_app())
+    with client.websocket_connect("/ws/verify") as ws:
+        ws.receive_json()  # first (failing) challenge — deliberately ignored
+        _arm(ws)
+        _stream_and_collect(ws, static_challenge_sequence(n=300, steps=_FRAMES_TO_AUTO_SCORE))
+
+        ws.send_json({"type": "retry"})
+        second = ws.receive_json()
+        _arm(ws)
+
+        compliant_frames = challenge_sequence(
+            second["axis"], float(second["magnitude_deg"]), n=300, steps=_FRAMES_TO_AUTO_SCORE
+        )
+        result = _stream_and_collect(ws, compliant_frames)
+        sig = _active_challenge_signal(result)
+        assert sig["status"] == "VALID" and sig["suspicion"] <= 0.1, sig["reason"]
+
+
+def test_ws_retries_are_bounded_and_the_final_failure_stands():
+    """Exhausting every retry ends the session (fail-closed) rather than granting retries forever —
+    bounded for session-cost, not security: a replay fails homography-consistency every attempt."""
+    client = TestClient(_make_app())
+    with client.websocket_connect("/ws/verify") as ws:
+        ws.receive_json()
+        for _ in range(3):  # consume all _MAX_CHALLENGE_RETRIES
+            _arm(ws)
+            _stream_and_collect(ws, static_challenge_sequence(n=300, steps=_FRAMES_TO_AUTO_SCORE))
+            ws.send_json({"type": "retry"})
+            msg = ws.receive_json()
+            assert msg["type"] == "challenge"
+
+        # One final failing attempt after the last granted retry — no retries left, session must end.
+        _arm(ws)
+        final_result = _stream_and_collect(
+            ws, static_challenge_sequence(n=300, steps=_FRAMES_TO_AUTO_SCORE)
+        )
+        assert _active_challenge_signal(final_result)["suspicion"] >= 0.7
+
+        ws.send_json({"type": "retry"})
+        msg = ws.receive_json()
+        assert msg["type"] == "error"
+        assert "no retries remaining" in msg["message"].lower()

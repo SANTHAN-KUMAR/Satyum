@@ -3,10 +3,12 @@ import {
   Ban,
   Camera,
   CameraOff,
+  CheckCheck,
   MonitorOff,
   Play,
   ScanLine,
   Square,
+  Timer,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useCamera } from "@/hooks/useCamera";
@@ -16,6 +18,7 @@ import { Panel } from "@/components/primitives/Panel";
 import { StateMessage } from "@/components/primitives/StateMessage";
 import { EvidenceConsole } from "@/components/evidence/EvidenceConsole";
 import { ChallengeOverlay } from "./ChallengeOverlay";
+import { ChallengeGuidance } from "./ChallengeGuidance";
 import { LiveTierStatus } from "./LiveTierStatus";
 import { ConnectionBadge } from "./ConnectionBadge";
 
@@ -78,6 +81,18 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
 
   const showPreview = camera.state === "live" || camera.state === "requesting";
 
+  // The active-challenge signal on the LATEST scored attempt, and whether it cleanly passed —
+  // mirrors the analyzer's own PASS threshold (backend/app/routes/verify.py :: _challenge_passed).
+  const activeSignal = socket.result?.signals.find((s) => s.name === "active_challenge");
+  const challengePassed =
+    activeSignal != null && activeSignal.suspicion !== null && activeSignal.suspicion <= 0.1;
+  const retriesRemaining = socket.challenge?.retries_remaining ?? null;
+  // Only render the evidence console once the outcome is truly final — a clean pass, or retries
+  // exhausted — so the underwriter-facing verdict never appears while an in-session retry is still on
+  // offer (that would read as final when it isn't).
+  const showEvidenceConsole =
+    socket.result != null && (challengePassed || !retriesRemaining);
+
   return (
     <div className="space-y-4">
       <Panel
@@ -105,7 +120,7 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
                 className="block aspect-video w-full bg-black object-cover"
                 aria-label="Live camera preview"
               />
-              <ChallengeOverlay challenge={socket.challenge} />
+              <ChallengeOverlay challenge={socket.challenge} armed={socket.armed} />
               {camera.state === "requesting" && (
                 <div className="absolute inset-0 flex items-center justify-center bg-canvas/60 text-sm text-text-secondary">
                   Waiting for camera permission…
@@ -132,14 +147,37 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
               Start live session
             </button>
           ) : (
-            <button
-              type="button"
-              onClick={stopSession}
-              className="inline-flex items-center gap-2 rounded-md border border-verdict-rejected/50 bg-verdict-rejected-soft px-4 py-2 text-sm font-semibold text-verdict-rejected hover:bg-verdict-rejected/20"
-            >
-              <Square size={14} aria-hidden="true" />
-              End session
-            </button>
+            <>
+              {socket.armed ? (
+                <button
+                  type="button"
+                  onClick={socket.requestScore}
+                  disabled={!streaming}
+                  className="inline-flex items-center gap-2 rounded-md border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <CheckCheck size={15} aria-hidden="true" />
+                  Verify now
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={socket.startAttempt}
+                  disabled={!streaming || !socket.challenge}
+                  className="inline-flex items-center gap-2 rounded-md border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Timer size={15} aria-hidden="true" />
+                  Start attempt
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={stopSession}
+                className="inline-flex items-center gap-2 rounded-md border border-verdict-rejected/50 bg-verdict-rejected-soft px-4 py-2 text-sm font-semibold text-verdict-rejected hover:bg-verdict-rejected/20"
+              >
+                <Square size={14} aria-hidden="true" />
+                End session
+              </button>
+            </>
           )}
           {socket.notice && (
             <span className="text-xs text-text-tertiary" role="status">
@@ -152,8 +190,18 @@ export function CameraCapture({ docType = null }: CameraCaptureProps) {
       {/* Live per-tier status while streaming. */}
       <LiveTierStatus signals={socket.liveSignals} streaming={streaming} />
 
-      {/* The final verdict, if the server concludes the live session. */}
+      {/* Plain-language, retryable guidance for the person performing the challenge — separate from
+          the technical evidence console below (CLAUDE.md §9). */}
       {socket.result && (
+        <ChallengeGuidance
+          result={socket.result}
+          retriesRemaining={retriesRemaining}
+          onRetry={socket.retry}
+        />
+      )}
+
+      {/* The final verdict, once the session outcome is truly final (pass, or retries exhausted). */}
+      {showEvidenceConsole && socket.result && (
         <EvidenceConsole
           trust={socket.result}
           previewUrl={null}

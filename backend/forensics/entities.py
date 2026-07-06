@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 from app.config import settings
 from app.contracts import AnalysisContext, LayerSignal, Mode
+from forensics.ocr import is_pdf
 
 # --------------------------------------------------------------------------------------------------
 # Verhoeff checksum (UIDAI Aadhaar's real validation scheme). Implemented from the canonical
@@ -257,6 +258,42 @@ def text_from_ocr_words(words: list[dict]) -> str:
     return "\n".join(out)
 
 
+def _pan_confirmed_on_page(ctx: AnalysisContext, pan_claim) -> bool:
+    """Independently confirm a VLM-claimed PAN is actually printed on its source page.
+
+    PAN's ontology type is ``"validated"`` (format-only) — unlike a numeric ``Money`` claim, ``builder.py``
+    never box-grounds or cross-reads it (ADR-004 §5.2 only covers ``cross_read_critical`` types). Left
+    unconfirmed, a VLM's freeform "pan" field would drive :class:`ClaimedIdentityAnalyzer`'s high-stakes
+    identity-mismatch accusation purely on the model's say-so — exactly the hallucination-laundering
+    CLAUDE.md §3.1/§5.3 forbids for a claim this consequential. This re-reads the claim's own source
+    page's real text (PyMuPDF — the same deterministic decode the Money cross-read uses) and requires
+    the claimed string to actually be printed there. Fails closed (not confirmed) on any parsing problem,
+    a locked/unreadable page, or a non-PDF file — an unconfirmed identity claim is never trusted.
+    """
+    if not ctx.file_bytes or not is_pdf(ctx.file_bytes):
+        return False
+    try:
+        import pymupdf
+
+        doc = pymupdf.open(stream=ctx.file_bytes, filetype="pdf")
+    except Exception:  # noqa: BLE001 — any decode failure fails closed (not confirmed)
+        return False
+    try:
+        if doc.needs_pass and not (ctx.pdf_password and doc.authenticate(ctx.pdf_password)):
+            return False
+        page_index = pan_claim.provenance.page if pan_claim.provenance else 0
+        if not (0 <= page_index < doc.page_count):
+            return False
+        page_text = doc.load_page(page_index).get_text("text") or ""
+    except Exception:  # noqa: BLE001 — a render failure fails closed (not confirmed), never crashes
+        return False
+    finally:
+        doc.close()
+    needle = re.sub(r"\s", "", pan_claim.value or "").upper()
+    haystack = re.sub(r"\s", "", page_text).upper()
+    return bool(needle) and needle in haystack
+
+
 class EntityExtractionAnalyzer:
     """FILE-mode foundation analyzer: publish ``ctx.shared['entities']`` for the cross-document graph.
 
@@ -318,7 +355,16 @@ class EntityExtractionAnalyzer:
                     )
             if not entities.pan:
                 pan_claim = cg.first("pan")
-                if pan_claim and pan_claim.value:
+                # Unlike name/dob (soft corroborators only), PAN feeds a hard identity-mismatch
+                # accusation (ClaimedIdentityAnalyzer) — never trust it from the VLM's say-so alone.
+                # Two independent gates, both required: (1) the value must actually be PAN-SHAPED —
+                # the "pan" predicate is a free-text label the VLM assigns itself (§5.4), and it can
+                # mislabel an unrelated printed value (observed: a customer's phone number extracted
+                # under predicate="pan") — a page-presence check alone would wrongly confirm it, since
+                # the phone number really is printed on the page, just not as a PAN; (2) the value must
+                # be independently confirmed as actually printed on its claimed source page.
+                pan_value = (pan_claim.value or "").strip().upper() if pan_claim else ""
+                if pan_claim and _PAN_RE.fullmatch(pan_value) and _pan_confirmed_on_page(ctx, pan_claim):
                     entities = ExtractedEntities(
                         pan=pan_claim.value.upper(), aadhaar=entities.aadhaar,
                         aadhaar_invalid=entities.aadhaar_invalid,

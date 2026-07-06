@@ -115,3 +115,40 @@ async def get_case(request: Request, case_id: str) -> CaseView:
     if case is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown case {case_id!r}")
     return _view(request, case)
+
+
+class CaseDocumentEvidenceView(BaseModel):
+    doc_id: str
+    label: str
+    verdict: str
+    added_at: str
+    evidence_pack: dict[str, Any] | None  # None only for a document added before this field existed
+
+
+class CaseEvidenceView(BaseModel):
+    case_id: str
+    documents: list[CaseDocumentEvidenceView]
+
+
+@router.get("/api/cases/{case_id}/evidence", response_model=CaseEvidenceView)
+async def get_case_evidence(request: Request, case_id: str) -> CaseEvidenceView:
+    """Every accumulated document's FULL evidence pack — additive to GET /api/cases/{id}, which stays
+    identity+verdict only (the lightweight case-overview list). This is what lets the case-level
+    Underwriter Copilot answer a question about ANY document in the case — not just the one most
+    recently viewed — by giving its tools (interpretability/tools.py) something to read per document,
+    fetched fresh server-side so it survives navigation/reload rather than living only in page state.
+    """
+    store = request.app.state.case_store
+    case = store.get(case_id)
+    if case is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown case {case_id!r}")
+    return CaseEvidenceView(
+        case_id=case.case_id,
+        documents=[
+            CaseDocumentEvidenceView(
+                doc_id=d.doc_id, label=d.label, verdict=d.verdict, added_at=d.added_at,
+                evidence_pack=d.evidence_pack,
+            )
+            for d in case.documents
+        ],
+    )

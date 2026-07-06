@@ -24,18 +24,28 @@ interface UseVerifySocketResult {
   challenge: ServerChallengeMessage | null;
   /** Live per-tier signal statuses, exactly as streamed by the server. */
   liveSignals: EvidencePackSignal[];
-  /** The final TrustScore once the server concludes the live session. */
+  /** The final TrustScore of the LATEST scored attempt, once the server has scored one. */
   result: TrustScore | null;
   /** The last honest notice/error string from the server or transport. */
   notice: string | null;
+  /** Has the CURRENT challenge been armed (real TTL clock running, frames now being buffered)? */
+  armed: boolean;
   connect: (docType: string | null) => void;
   disconnect: () => void;
   sendFrame: (jpegBase64: string) => void;
+  /** Signal readiness for the current challenge — starts the real TTL clock server-side. Nothing
+   * is buffered/scored before this, so reading the instruction never races a hidden deadline. */
+  startAttempt: () => void;
+  /** Ask the server to score the buffered frames now, instead of waiting for the TTL/frame trigger. */
+  requestScore: () => void;
+  /** After a failed/unmet attempt, ask the server for a fresh challenge on this same connection. */
+  retry: () => void;
 }
 
 export function useVerifySocket(): UseVerifySocketResult {
   const [state, setState] = useState<SocketState>("idle");
   const [challenge, setChallenge] = useState<ServerChallengeMessage | null>(null);
+  const [armed, setArmed] = useState(false);
   const [liveSignals, setLiveSignals] = useState<EvidencePackSignal[]>([]);
   const [result, setResult] = useState<TrustScore | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -68,6 +78,7 @@ export function useVerifySocket(): UseVerifySocketResult {
     (docType: string | null) => {
       cleanup();
       setChallenge(null);
+      setArmed(false);
       setLiveSignals([]);
       setResult(null);
       setNotice(null);
@@ -105,7 +116,18 @@ export function useVerifySocket(): UseVerifySocketResult {
         }
         switch (msg.type) {
           case "challenge":
+            // A challenge arriving after a prior result is a fresh in-session retry attempt — drop
+            // the stale verdict/signals so the UI re-enters "attempting", not "showing old result".
+            // Not armed yet — the new attempt again waits for an explicit "start_attempt".
+            setResult(null);
+            setLiveSignals([]);
+            setArmed(false);
             setChallenge(msg);
+            break;
+          case "armed":
+            // The real TTL clock just started server-side — reflect its authoritative deadline.
+            setArmed(true);
+            setChallenge((prev) => (prev ? { ...prev, expires_at_ms: msg.expires_at_ms } : prev));
             break;
           case "tier_status":
             setLiveSignals(msg.signals);
@@ -151,7 +173,24 @@ export function useVerifySocket(): UseVerifySocketResult {
     [send, challenge],
   );
 
+  const startAttempt = useCallback(() => send({ type: "start_attempt" }), [send]);
+  const requestScore = useCallback(() => send({ type: "score" }), [send]);
+  const retry = useCallback(() => send({ type: "retry" }), [send]);
+
   useEffect(() => cleanup, [cleanup]);
 
-  return { state, challenge, liveSignals, result, notice, connect, disconnect, sendFrame };
+  return {
+    state,
+    challenge,
+    armed,
+    liveSignals,
+    result,
+    notice,
+    connect,
+    disconnect,
+    sendFrame,
+    startAttempt,
+    requestScore,
+    retry,
+  };
 }

@@ -131,6 +131,12 @@ class ClaimGraphBuilder:
         ``seq_offset`` renumbers this page's transactions so they continue the previous page's sequence
         (so the running-balance chain is unbroken across pages). ``seen_fields`` deduplicates scalar
         fields/summary rows that the model might repeat in a page header (keep the first occurrence).
+
+        The reader's own ``txn.seq`` is untrusted input (CLAUDE.md §3.1/§5.4): used only to sort this
+        page's rows into document order (best-effort — it is still the model's best signal of "which
+        came first"), never to size the next page's offset. A page's global index always advances by
+        exactly the number of rows this page actually produced, so a reader whose per-page numbering is
+        non-zero-based, gapped, or duplicated cannot drop rows or misalign every later page.
         """
         page_img = self._decode(page)
 
@@ -150,10 +156,9 @@ class ClaimGraphBuilder:
             if claim is not None:
                 graph.add(claim)
 
-        max_seq = -1
-        for txn in raw.transactions:
-            seq = txn.seq + seq_offset
-            max_seq = max(max_seq, txn.seq)
+        ordered_txns = sorted(raw.transactions, key=lambda t: t.seq)
+        for local_i, txn in enumerate(ordered_txns):
+            seq = seq_offset + local_i
             for cell_name, value_type in TXN_CELL_VALUE_TYPE.items():
                 cell: ExtractedValue | None = getattr(txn, cell_name)
                 if cell is None:
@@ -178,7 +183,7 @@ class ClaimGraphBuilder:
             if claim is not None:
                 graph.add(claim)
 
-        return seq_offset + max_seq + 1 if max_seq >= 0 else seq_offset
+        return seq_offset + len(ordered_txns)
 
     # --- internals --------------------------------------------------------------------------------
 

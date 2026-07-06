@@ -1,5 +1,5 @@
 import { apiUrl, ApiError } from "./client";
-import type { CrossFieldComparison } from "./types";
+import type { CrossFieldComparison, EvidencePack } from "./types";
 
 /**
  * Application-case API (backend app/routes/cases.py). A case accumulates an applicant's documents so
@@ -48,4 +48,31 @@ export async function getCase(caseId: string): Promise<CaseView> {
     headers: { Accept: "application/json" },
   });
   return readOrThrow(res, "Could not load the application case");
+}
+
+export interface CaseDocumentEvidenceView {
+  doc_id: string;
+  label: string;
+  verdict: string;
+  added_at: string;
+  evidence_pack: EvidencePack | null;
+}
+
+export interface CaseEvidenceView {
+  case_id: string;
+  documents: CaseDocumentEvidenceView[];
+}
+
+/** Every accumulated document's FULL evidence pack — GET /api/cases/{id}/evidence. This is what feeds
+ * the case-level Underwriter Copilot (via CopilotContext.setCaseContext) so it can answer a question
+ * about ANY document in the case, fetched fresh from the backend rather than only remembering the
+ * single most-recently-added document in page state. */
+export async function getCaseEvidence(caseId: string): Promise<CaseEvidenceView> {
+  const res = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/evidence`), {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new ApiError(`Could not load the case's evidence (HTTP ${res.status})`, res.status);
+  }
+  return (await res.json()) as CaseEvidenceView;
 }

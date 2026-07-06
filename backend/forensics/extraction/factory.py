@@ -20,6 +20,7 @@ import logging
 
 from app.config import Settings
 from forensics.extraction.anthropic_extractor import AnthropicVLMExtractor
+from forensics.extraction.cache import CACHE_MODE_OFF, CachingExtractor, ExtractionCacheStore
 from forensics.extraction.fallback import FallbackExtractor
 from forensics.extraction.gemini_extractor import GeminiVLMExtractor
 from forensics.extraction.groq_extractor import GroqVLMExtractor
@@ -174,9 +175,17 @@ def build_default_extractor(settings: Settings) -> VLMExtractor | None:
         handled_scripts=frozenset({"indic", "latin"}),
     )
     if indic:
-        return LanguageRoutedExtractor(
+        default = LanguageRoutedExtractor(
             default=default,
             specialists={FAMILY_INDIC: indic[0]},
             escalate_below_confidence=settings.vlm_escalate_below_confidence,
         )
+
+    # Wrap the fully-composed reader (routing + fallback) in the replay cache last, so a transcription is
+    # cached regardless of which internal reader produced it, and a saved cache can serve even when every
+    # live reader is rate-limited/offline (CLAUDE.md §4). No-op unless SATYUM_VLM_CACHE_MODE is set.
+    mode = (settings.vlm_cache_mode or CACHE_MODE_OFF).strip().lower()
+    if mode != CACHE_MODE_OFF:
+        store = ExtractionCacheStore(settings.vlm_cache_dir)
+        return CachingExtractor(default, store=store, mode=mode)
     return default

@@ -35,6 +35,15 @@ def linear_balance(
     so a single edited cell breaks at its own row (and the next), never cascading into a false storm of
     downstream breaks. Insufficient (no opening anchor, <2 printed balances, or no movement) ⇒ the rule
     is NOT_EVALUATED, never a fabricated pass — exactly the honest bound of the original engine.
+
+    A row with no printed balance (its cross-read didn't confirm it — e.g. an ungrounded VLM box, common
+    when a whole page's grounding degrades) is not compared; its movement is silently folded into
+    ``expected`` and carried forward uncompared. Each :class:`Break` records ``unconfirmed_run`` — how
+    many such uncompared rows immediately preceded it. A break with ``unconfirmed_run == 0`` sits right
+    after a confirmed row: a genuine single-cell edit, unambiguous tamper evidence. A break with a large
+    ``unconfirmed_run`` means the mismatch may just be the accumulated, unverifiable movement of an
+    unconfirmed run — real evidence of *something unread*, but not proof of an edited figure. The caller
+    (F1) uses this to avoid reporting an extraction gap as tampering (CLAUDE.md §3.3).
     """
     printed_count = sum(1 for _, _, _, p in rows if p is not None)
     movement_count = sum(1 for _, c, d, _ in rows if c is not None or d is not None)
@@ -44,15 +53,20 @@ def linear_balance(
     breaks: list[Break] = []
     checks = 0
     running = anchor
+    unconfirmed_run = 0
     for index, credit, debit, printed in rows:
         expected = running + (credit or Decimal(0)) - (debit or Decimal(0))
         if printed is not None:
             checks += 1
             if not _close(expected, printed, tol):
-                breaks.append(Break(expected=expected, printed=printed, index=index))
+                breaks.append(
+                    Break(expected=expected, printed=printed, index=index, unconfirmed_run=unconfirmed_run)
+                )
             running = printed  # re-anchor on the printed figure (local break, not cascading)
+            unconfirmed_run = 0
         else:
             running = expected
+            unconfirmed_run += 1
     return CheckOutcome(evaluated=True, breaks=tuple(breaks), checks_run=checks)
 
 

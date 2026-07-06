@@ -8,12 +8,16 @@ inconsistent double-perspective are all high-suspicion.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import numpy as np
 
 from app.config import settings
 from app.contracts import AnalysisContext, Mode, SignalStatus
 from capture.challenge import (
     ActiveChallengeAnalyzer,
+    _center_crop_mask,
+    _document_seed_mask,
     angular_jerk_cv,
     homography_consistency,
     recover_axis_angles,
@@ -22,6 +26,7 @@ from capture.challenge import (
 from tests.capture_fixtures import (
     challenge_sequence,
     double_perspective_sequence,
+    small_document_over_busy_static_background,
     static_challenge_sequence,
 )
 
@@ -204,3 +209,74 @@ def test_honest_bound_documents_injection_gap():
     az = ActiveChallengeAnalyzer()
     sig = az.analyze(_ctx(challenge_sequence("x", 15.0), _cmd("x", 15.0)))
     assert "injection" in sig.measurements["honest_bound"].lower()
+
+
+# ============================================================================================
+#  reason_code — the plain-language mapping key for the live-capture guidance UI (not the
+#  technical `reason` string, which stays verbatim for the underwriter evidence console)
+# ============================================================================================
+
+def test_reason_code_matches_each_branch():
+    az = ActiveChallengeAnalyzer()
+    passing = az.analyze(_ctx(challenge_sequence("x", 15.0), _cmd("x", 15.0)))
+    # the synthetic fixture is a perfectly linear ramp -> flagged as scripted-smooth (a real, honest
+    # sub-signal, see test_angular_jerk_separates_scripted_from_human) -> the "clean pass, but
+    # mechanically smooth" reason_code, not the unconditional "live_ok" (a human hand is never this
+    # linear; that reason_code is exercised implicitly whenever jerk_cv clears _JERK_SCRIPTED_MAX).
+    assert passing.measurements["reason_code"] == "live_ok_scripted_suspected"
+
+    screen = az.analyze(_ctx(double_perspective_sequence(), _cmd("x", 14.0)))
+    assert screen.measurements["reason_code"] == "inconsistent_homography"
+
+    # zero realised motion at all (a frozen replay) falls on the wrong AXIS: with realised ~0 deg on
+    # both axes, neither clears the tolerance, so axis dominance can't be established either.
+    static_replay = az.analyze(_ctx(static_challenge_sequence(), _cmd("x", 15.0)))
+    assert static_replay.measurements["reason_code"] == "wrong_axis"
+
+    wrong_axis = az.analyze(_ctx(challenge_sequence("y", 15.0), _cmd("x", 15.0)))
+    assert wrong_axis.measurements["reason_code"] == "wrong_axis"
+
+    # right axis, real motion realised, but well short of the commanded magnitude -> wrong_magnitude.
+    wrong_mag = az.analyze(_ctx(challenge_sequence("x", 15.0), _cmd("x", 30.0)))
+    assert wrong_mag.measurements["reason_code"] == "wrong_magnitude"
+    # realised (~15) < commanded (30) -> needs MORE motion, not less
+    assert wrong_mag.measurements["needs_more_or_less"] == "more"
+
+
+def test_needs_more_or_less_only_present_on_wrong_magnitude():
+    az = ActiveChallengeAnalyzer()
+    passing = az.analyze(_ctx(challenge_sequence("x", 15.0), _cmd("x", 15.0)))
+    assert "needs_more_or_less" not in passing.measurements
+    screen = az.analyze(_ctx(double_perspective_sequence(), _cmd("x", 14.0)))
+    assert "needs_more_or_less" not in screen.measurements
+
+
+# ============================================================================================
+#  Regression: a small document against a busy, static background must still PASS — a real user
+#  holding an ID card against a real room (door, wall, their own face) is exactly this scenario,
+#  and it was FALSELY flagged "inconsistent homography / photo-of-screen" before corner seeding
+#  was restricted to the document's own quad (capture/challenge.py::_document_seed_mask).
+# ============================================================================================
+
+def test_small_document_over_busy_background_still_passes():
+    az = ActiveChallengeAnalyzer()
+    frames = small_document_over_busy_static_background("x", 15.0)
+    sig = az.analyze(_ctx(frames, _cmd("x", 15.0)))
+    assert sig.status == SignalStatus.VALID
+    assert sig.suspicion is not None and sig.suspicion <= 0.1, sig.reason
+    assert sig.measurements["single_homography_consistent"] is True
+    assert sig.measurements["axis_match"] is True
+    assert sig.measurements["magnitude_match"] is True
+
+
+def test_seed_mask_falls_back_to_center_crop_not_unmasked():
+    """When contour-based quad detection fails outright (messy real-world lighting/shadows a
+    synthetic fixture won't reproduce), seeding must still be BIASED toward the center — never
+    silently fall back to the whole frame, which would reintroduce the background-outvoting bug."""
+    frame = np.full((300, 300, 3), 128, np.uint8)  # no detectable quad in a flat frame
+    with patch("capture.challenge.find_document_quad", return_value=None):
+        mask = _document_seed_mask(frame)
+    assert mask is not None
+    # Matches the dedicated center-crop fallback, not an all-255 (fully unmasked) array.
+    assert np.array_equal(mask, _center_crop_mask(frame))
+    assert 0 < mask.sum() < mask.size * 255  # neither empty nor the whole frame

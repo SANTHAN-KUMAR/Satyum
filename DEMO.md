@@ -1,254 +1,210 @@
-# Satyum — Demo & Test Runbook
+# Demo runbook
 
-How to **run, test, and convincingly demonstrate every feature** of Satyum — the real-time
-document-integrity evidence console for bank underwriting. Every verdict below was observed
-end-to-end through the real waterfall (orchestrator → analyzers → risk engine), not asserted from
-memory. Every sample is fully synthetic and reproducible (`python samples/generate.py`).
+How to run and demonstrate Satyum end to end. Every verdict quoted below was actually observed
+running the real pipeline (orchestrator, analyzers, risk engine), not written from memory. The demo
+documents in [`demo/`](demo/README.md) are fully synthetic or generated from public sample templates
+and are checked into the repo, so they're there right after a fresh clone.
 
-> **The one thing to internalise:** **the model reads; deterministic rules decide.** A vision-language
-> model reads arbitrary document layouts into a canonical claim graph, but every number it reports is
-> box-grounded and independently re-read, and a **deterministic, explainable rule engine — not the
-> model — sets the verdict.** Drag a document in, and the console tells you **what changed, where, why
-> it's risky, and what to do** — and you can prove the judgment isn't faking by editing one figure and
-> watching the verdict move (see §5). (Full architecture:
-> [ADR-004](architecture/ADR-004-v2-progressive-evidence-architecture.md).)
-
----
+The one thing worth saying out loud during a demo: the model reads, deterministic rules decide. A
+vision-language model reads a document's layout into typed claims, every number it reports is
+independently re-read by a separate OCR pass, and a deterministic, explainable rule engine sets the
+verdict, not the model. Drag a document in and the console shows what changed, where, and why. You
+can prove the judgment isn't faked by editing one figure in a genuine document and watching the
+verdict move (see the "proving it's real" section below).
 
 ## 1. Start the stack
 
-### Option A — one command (recommended for a demo)
+**Option A, one command:**
 ```bash
 docker compose up --build
-# → open http://localhost:8080
+# open http://localhost:8080
 ```
-Nginx serves the app and proxies `/api` + `/ws` to the backend; Postgres gives a durable, hash-chained
-audit ledger; the demo CA root is bundled in the image so source-of-truth crypto verifies the signed
-samples. `localhost` is a secure origin, so the **camera works** without HTTPS.
+Nginx serves the app and proxies `/api` and `/ws` to the backend. Postgres backs a durable,
+hash-chained audit ledger. The demo certificate authority root is baked into the image so the signed
+sample PDFs verify out of the box. `localhost` counts as a secure origin, so the camera works without
+needing HTTPS.
 
-### Option B — local dev (two terminals)
+**Option B, two terminals for local dev:**
 ```bash
-# Terminal 1 — backend (source-of-truth verification pinned to the demo CA root so signed PDFs verify)
+# backend, pinned to the demo trust anchor so the signed sample PDFs verify
 cd backend && source .venv/bin/activate
 SATYUM_TRUST_ANCHOR_DIR="$(pwd)/../samples/trust" uvicorn app.main:app   # :8000
 
-# Terminal 2 — frontend (Vite proxies /api and /ws to :8000)
-cd frontend && npm install && npm run dev                                # → http://localhost:5173
+# frontend, proxies /api and /ws to :8000
+cd frontend && npm install && npm run dev                                # http://localhost:5173
 ```
 
-**Health check (and proof the audit chain is intact):**
+Health check, also confirms the audit chain is intact:
 ```bash
-curl -s localhost:8080/api/health   # docker   (or :8000 for local dev)
+curl -s localhost:8080/api/health
 # {"status":"ok","analyzers":16,"audit_backend":"postgres","audit_chain_intact":true,...}
 ```
 
-> **Source-of-truth trust anchor:** the demo-signed PDFs verify only when the backend pins this kit's
-> public root ([`samples/trust/demo_ca_root.pem`](samples/trust/demo_ca_root.pem)). Docker bundles it.
-> Locally, set `SATYUM_TRUST_ANCHOR_DIR` as shown. **Without it the signed PDFs fail _closed_**
-> (untrusted chain) — which is itself correct, safe behaviour, just not the "green" you want on stage.
+Without `SATYUM_TRUST_ANCHOR_DIR` pointing at `samples/trust`, the signed demo PDFs fail closed
+(untrusted chain), which is correct behavior, just not what you want mid-demo.
 
----
+## 2. A five-minute walkthrough
 
-## 2. The 5-minute headline demo (tell the story)
+Run these in order, using the File upload tab unless noted. This walks through the pipeline in the
+order it actually runs: provenance first, then reading and judging, then in-person capture.
 
-Run these four in order — it walks the **progressive-evidence pipeline**: provenance first, then the
-model *reads* and deterministic rules *decide*, then in-person capture. Use the **File upload** tab
-unless noted.
-
-| # | Drag in | You'll see | The line to say |
+| # | Drag in | You'll see | What to say |
 |---|---|---|---|
-| 1 | `samples/hard/signed_statement_genuine.pdf` | ✅ **APPROVED · source-verified** | "A bank e-statement with a real digital signature. We verify the signature chains to the CCA-India root **before trusting a single byte** — integrity answered at the source. Verified means byte-authenticity, so the claims still flow into corroboration." |
-| 2 | `samples/hard/signed_statement_shadow_attacked.pdf` | ❌ **REJECTED · tampered** | "Same signed statement, but someone edited it *after* signing. 'A signature exists' is not 'a signature is valid' — we catch that the signature no longer covers the whole file. The shadow attack." |
-| 3 | `samples/hard/statement_tampered.png` | ❌ **REJECTED** — arithmetic finding names the figures | "No signature to lean on — a scanned statement. **The model reads the layout into typed claims; deterministic rules judge them.** A forger inflated their salary credit, but they **can't keep the document's math coherent** — the financial rule pack recomputes every running balance (expected ₹285,000 vs printed ₹185,000), and every number is independently re-read so the model can't quietly 'correct' a tamper into consistency." |
-| 4 | **Live capture** tab → perform the challenge (see §4) | ⚠️/✅ live verdict with the active-challenge result | "For wet-ink or contested *physical* paper, the server issues an **unpredictable physical challenge** and verifies the document's tracked motion — defeating a photo-of-a-screen or a pre-recorded clip." |
+| 1 | `demo/01_signature_verification/genuine_signed.pdf` | APPROVED, source-verified | "This PDF carries a real digital signature. We check that it chains to a trusted root before trusting a single byte of content." |
+| 2 | `demo/01_signature_verification/appended_after_signature.pdf` | REJECTED, tampered | "Same idea, but someone appended bytes to this file after it was signed. A signature existing isn't the same as a signature being valid over the whole file, and we catch the difference." |
+| 3 | `demo/02_statement_tampering/tampered_salary_inflate.pdf` | REJECTED, arithmetic finding names the row | "No signature to lean on here, a plain scanned-style statement. The model reads the layout into structured claims, then deterministic rules recompute the running balance. Someone inflated a salary credit, and the math simply doesn't add up anymore. The finding names the exact figure." |
+| 4 | Live capture tab, perform the tilt challenge (see section 4) | Live verdict with the challenge result | "For wet-ink or contested physical paper, the server asks for an unpredictable tilt and checks the real motion, which defeats a photo of a screen or a pre-recorded clip." |
 
-Then point at the console itself: the **trust gauge**, the **provenance card**, the **per-signal
-findings** with their mode tags, and the **Not-evaluated (pending)** list — *"nothing that didn't run
-is shown as a pass."*
+Then point at the console itself: the trust score, the provenance card, the individual findings with
+their status, and the "not evaluated" list, nothing that didn't actually run is shown as a pass.
 
----
+## 3. Every feature, what to drag in, and what it proves
 
-## 3. Every feature — what to drag, expected verdict, what it proves
+### Signature verification (File upload tab)
 
-### Source of truth — cryptographic provenance (File upload)
-| Sample | Verdict (score) | Proves |
+| File | Verdict | Proves |
 |---|---|---|
-| `hard/signed_statement_genuine.pdf` | ✅ APPROVED (99) · source-verified | Full PAdES chain validation to a **pinned** anchor, on a document with visible content. |
-| `pdfs/genuine_signed.pdf` | ✅ APPROVED (99) · source-verified | Same, minimal PDF. |
-| `pdfs/attacker_self_signed.pdf` | ⚠️ REVIEW · issuer unconfirmed | Attacker's own cert. The signature is intact but its chain does not reach a pinned anchor, so it is NOT source-verified and routes to forensic review. It is deliberately NOT called "tampered": the bytes are unaltered, and a genuine document from an unpinned issuer (a real Aadhaar before its CCA-India root is pinned) is cryptographically identical. We never accuse an intact document of fraud just because its issuer is not pinned (ADR-006). |
-| `pdfs/appended_after_signature.pdf` | ❌ REJECTED (5) · tampered | Bytes appended after the signed `/ByteRange` (shadow / incremental-update attack). The content WAS altered, so this is genuine tampering. |
-| `hard/signed_statement_shadow_attacked.pdf` | ❌ REJECTED (5) · tampered | The shadow attack on a **realistic** signed e-statement. |
-| `pdfs/unsigned.pdf` | ⚠️ REVIEW · forensic-fallback | No signature → falls through to forensics; never an unearned pass. |
+| `demo/01_signature_verification/genuine_signed.pdf` | APPROVED, source-verified | Full chain validation to a pinned trust anchor. |
+| `demo/01_signature_verification/attacker_self_signed.pdf` | REVIEW, issuer unconfirmed | The signature is intact but signed by an untrusted certificate. This is deliberately not labeled "tampered": the bytes are unaltered, and a genuine document from an issuer we simply haven't pinned yet would look identical. We don't accuse a document of fraud just because its issuer isn't in our trust list. |
+| `demo/01_signature_verification/appended_after_signature.pdf` | REJECTED, tampered | Bytes were appended after the signed byte range. The content actually changed, so this is real tampering. |
+| `demo/01_signature_verification/unsigned.pdf` | REVIEW | No signature, falls through to document-level analysis, never an unearned pass. |
 
-### Judgment — financial rule pack over the claim graph (File upload) — the primary tamper signal
-The model reads each statement into typed claims; the deterministic **financial rule pack** (rehomed
-from the v1 arithmetic engine) judges them, and every numeric claim is independently re-read before a
-rule trusts it.
-| Sample | Verdict (score) | Proves |
+### Financial rule pack over the claim graph (File upload tab), the primary tamper signal
+
+The model reads each statement into typed claims. The financial rule pack judges them, and every
+numeric claim is independently re-read before any rule is allowed to trust it.
+
+| File | Verdict | Proves |
 |---|---|---|
-| `hard/statement_genuine.png` | ✅ APPROVED (~100) | A realistic month of activity that reconciles to the cent. |
-| `hard/statement_tampered.png` | ❌ REJECTED (~47) | One inflated salary credit breaks **three** invariants: running balance, credit total, net reconciliation. Open the arithmetic finding to see the exact figures. |
-| `statements/genuine_statement.png` | ✅ APPROVED | Clean toy statement (the minimal logic demo). |
-| `statements/tampered_statement.png` | ❌ REJECTED | A single inflated balance figure; the chain breaks at the exact row. |
+| `demo/02_statement_tampering/genuine_statement.pdf` | APPROVED or REVIEW | A statement whose numbers reconcile end to end. |
+| `demo/02_statement_tampering/tampered_closing_balance.pdf` | REJECTED | Closing balance doesn't match the running total. |
+| `demo/02_statement_tampering/tampered_salary_inflate.pdf` | REJECTED | One inflated credit breaks the running balance, the credit total, and the net reconciliation at once. |
+| `demo/02_statement_tampering/tampered_debit_removed.pdf` | REJECTED | A zeroed-out debit breaks the running balance starting at that exact row. |
 
-### Corroboration — cross-document identity graph (Document bundle tab — submit **all files in the folder together**)
+### Cross-document identity corroboration (Document bundle tab, submit every file in a bundle folder together)
+
 | Bundle | Verdict | Proves |
 |---|---|---|
-| `bundle_consistent/` (both PNGs) | ⚠️ REVIEW (corroborated) | Statement + ID carry the **same** name + PAN → the bundle corroborates one identity. |
-| `bundle_mismatch/` (both PNGs) | ❌ REJECTED | The two documents carry **different PANs** → a hard identity mismatch floors the verdict regardless of either document's own score. The graph names both documents and both values. |
+| `demo/04_full_bundle_clean_match/` | REVIEW or APPROVED | Statement, Aadhaar, salary slip, and Form 16 all agree on identity and income. |
+| `demo/04_full_bundle_identity_mismatch/` | REJECTED | The Aadhaar in the bundle carries a different name from the rest of the documents. A hard identity mismatch floors the verdict regardless of any individual document's own score. |
+| `demo/04_full_bundle_tampered_math/` | REJECTED | Same applicant, but the bank statement's closing balance has been edited. |
 
-### In-person escalation — live capture, the active 3D challenge (Live capture tab) — see §4.
+### In-person escalation, the active tilt challenge (Live capture tab), see section 4.
 
-### Interpretability — the narrator & underwriter copilot (read-only, firewalled)
+### Interpretability: the narrator and underwriter copilot
 
-After any verification completes, the console can explain the verdict in plain English and answer
-follow-up questions — **without that explanation ever being able to change the verdict**
-([ADR-006](architecture/ADR-006-interpretability-and-resilience.md)).
+Once a verification finishes, the console can explain the result in plain English and answer
+follow-up questions, without that explanation ever being able to change the verdict (see
+[ADR-006](architecture/ADR-006-interpretability-and-resilience.md)).
 
-- **Narrator:** the evidence pack is rendered as a **3-paragraph plain-English summary** (what was
-  analysed + the verdict · the key findings, jargon translated · the recommended action). API:
-  `POST /api/interpret/narrative` with the evidence pack.
-- **Copilot:** ask a question (e.g. *"why was this rejected?"*, *"what does the arithmetic finding
-  say?"*) and it answers using **MCP-style read-only tools** over the *frozen* evidence pack
-  (`get_signal_detail`, `get_provenance_detail`, `get_overall_verdict`, …). API: `POST /api/interpret/ask`.
-  Frontend panel: `components/Console/CopilotPanel.tsx`.
+- **Narrator**: renders the evidence pack as a short plain-English summary covering what was
+  analyzed, the key findings translated out of jargon, and the recommended action.
+  `POST /api/interpret/narrative`.
+- **Copilot**: answers questions like "why was this rejected?" using read-only tools over the frozen
+  evidence pack. `POST /api/interpret/ask`. Frontend panel:
+  `frontend/src/components/Console/CopilotPanel.tsx`.
 
-**What proves it can't lie:** the **firewall** always overrides the narrative's verdict with the true
-deterministic one and **discards** any narrative whose recommendation contradicts it; on any LLM failure
-it falls back to a deterministic narrative (flagged `is_fallback`). So even a prompt-injected narrator
-can be discarded, never obeyed. The interpreter is decoupled from the vision reader — point
-`SATYUM_INTERPRET_*` at a text reasoner (e.g. DeepSeek v4) while a separate VLM reads (DeepSeek's hosted
-API is text-only, so it narrates but never reads documents).
+What proves it can't lie: a firewall always overrides the narrative's stated verdict with the real
+deterministic one and discards any narrative whose recommendation contradicts it. If the underlying
+LLM call fails, it falls back to a deterministic narrative instead of erroring out. The narrator and
+copilot can run on a different text model than the document reader (`SATYUM_INTERPRET_*`), useful if
+your document reader is a vision model that can't also serve as a good conversational narrator.
 
-### Password-protected PDFs — signature-preserving in-memory decrypt (API-level today)
+### Password-protected PDFs
 
-Government/bank PDFs (Aadhaar, CAMS/Karvy CAS, signed e-statements) ship encrypted. Submit one and the
-backend returns a recoverable `{"needs_password": true}` response — **not a fraud signal, not an error**.
-Re-submit with the password (the `pdf_password` form field on `/api/verify`) and the backend **decrypts
-in memory**, never re-saving — so a signed-then-encrypted PDF **still verifies and chains to the pinned
-anchor** (a 3rd-party password remover would re-save the file and destroy the signature). See
-[ADR-006](architecture/ADR-006-interpretability-and-resilience.md) §3.
+Government and bank PDFs (Aadhaar, CAMS/Karvy statements, signed e-statements) often ship encrypted.
+Submitting one returns `{"needs_password": true}`, not an error and not a fraud signal. Resubmitting
+with the password (the `pdf_password` field on `/api/verify`) decrypts it in memory without ever
+re-saving the file, which matters because a signed-then-encrypted PDF still needs to verify against
+its original signature, and re-saving with a third-party tool would destroy that signature. Covered
+end to end in `backend/tests/test_pdf_password.py`.
 
-> Backend and frontend are both implemented and tested (`tests/test_pdf_password.py`, 9 tests). Upload a
-> password-protected PDF in the onboarding flow; when the API returns `needs_password`, an inline field
-> collects the password and resubmits.
+### Misparse-resistant arithmetic
 
-### Misparse-resistant arithmetic — a parser error is REVIEW, never a false REJECT
+On a real multi-page statement, if the deterministic OCR fallback misreads a balance cell (a stray
+digit next to a lakh-scale number), Satyum drops the obviously off-scale figure instead of letting it
+cascade into a false rejection. A total misparse resolves to not evaluated, which routes to review,
+while a genuinely tampered figure still gets flagged. See `backend/tests/test_arithmetic.py`.
 
-On a real multi-page statement where the deterministic text-layer fallback misreads a balance cell (a
-stray `1` amid lakh-scale balances), Satyum now drops the off-scale figure instead of cascading it into
-a false REJECT: an all-misparse break resolves to `NOT_EVALUATED` (pending → **REVIEW**), while a
-*plausible* edited figure (a real tamper) still flags. This is why the genuine 7-page statement resolves
-to REVIEW, and tamper detection is unchanged (`tests/test_arithmetic.py`,
-[ADR-006](architecture/ADR-006-interpretability-and-resilience.md) §4).
+## 4. The live-camera demo
 
----
+The camera path exists for wet-ink or contested physical documents in person, it is not the primary
+path for financial statements. It's wired end to end: the browser streams downscaled frames over a
+WebSocket, the server issues a randomized tilt instruction, and the active-challenge analyzer checks
+the realized motion against that instruction using homography. Frames are processed in memory and
+never saved to disk.
 
-## 4. The live-camera demo (in-person escalation)
+To run it:
+1. Open the Live capture tab, start a session, and grant camera permission.
+2. Hold a printed, text-bearing document in frame. A printout of one of the demo statements works
+   well, the tracker needs visible texture, a blank sheet won't track.
+3. Read the on-screen instruction, for example "tilt the document's left edge toward the camera about
+   20 degrees, and hold." Perform that tilt deliberately and hold it while the countdown runs.
+4. After a few seconds the server scores the attempt and the verdict appears, along with the measured
+   tilt versus the commanded one.
 
-The camera path is the **in-person escalation for wet-ink / contested *physical* documents** (not the
-financial-statement primary path). It is wired end-to-end: the browser streams downscaled frames over a
-WebSocket, the server issues a **server-randomized** tilt challenge, and `ActiveChallengeAnalyzer`
-verifies the realised motion against the command via homography. **Frames are processed in memory and
-never persisted.**
+What proves it's real:
+- Holding still or tilting the wrong way produces "challenge unmet." The verdict tracks your actual
+  motion.
+- Pointing the camera at a photo of a document on another screen breaks the single-homography
+  consistency check (the bezel and the double layer of perspective give it away) and gets flagged as
+  a screen replay.
+- The challenge axis and magnitude are randomized per session, so a pre-recorded clip can't satisfy a
+  command that didn't exist when it was recorded.
 
-**To run it:**
-1. Open the **Live capture** tab → **Start live session** → grant camera permission.
-2. Hold a **printed, text-bearing document** in frame (a printout of `hard/statement_genuine.png`
-   works well — the tracker needs texture; a blank sheet won't track).
-3. Read the on-screen instruction, e.g. *"Tilt the document's left edge toward the camera about 20°,
-   and hold steady."* Perform that tilt **deliberately and hold** while the countdown runs.
-4. After ~5 seconds the server auto-scores and the verdict appears, with the `active_challenge`
-   finding ("commanded y-tilt 20° realised 20.6° on a single consistent homography — live document").
+Stated honestly: this defeats presentation replay (a printed photo, a phone screen), not a virtual
+camera feed injecting fake video at the OS level. That would need platform-level attestation and is a
+separate, lower-weight, openly documented check.
 
-**What proves it's real:**
-- **Hold still / don't tilt** → "challenge unmet" (high suspicion). The verdict moves with your motion.
-- **Point the camera at a photo of a document on another screen** → the bezel/double-perspective
-  breaks the single-homography consistency check → flagged as photo-of-screen.
-- The challenge axis + magnitude are **randomized per session** — a pre-recorded clip can't satisfy a
-  command issued only after the session starts.
+## 5. Proving it isn't faking anything
 
-> Honest bound (stated in the UI and the code): this defeats *presentation* replay (a clip, a
-> photo-of-screen), **not** stream *injection* (a virtual camera) — which needs native platform
-> attestation and is a separate, low-weight, documented-bypassable check.
+This is worth walking through with a skeptical evaluator. The decision layer is deterministic: rules
+recompute the document's own arithmetic, and the verdict moves with the input.
 
----
+Live, in front of them:
+- Open any genuine demo statement in an image or PDF editor, change one balance figure, save it, and
+  drag it in. The verdict flips to REJECTED and the finding names the new broken figure. The output
+  moves with the input, it's recomputing the math, not pattern-matching against a known-bad list.
+- Drag the genuine and the tampered version back to back and watch the verdict flip.
 
-## 5. How to prove it's NOT faking (for the skeptical evaluator)
-
-This is the most important part — a fraud system whose own code lies is self-defeating, so Satyum is
-built to be *checkable*. The decision is **deterministic**: the rules recompute the document's logic,
-and the verdict moves with the input. (The *reading* layer is separately guarded — every numeric claim
-the VLM locates is independently re-read by a deterministic OCR on its exact crop, so the model can't
-quietly "auto-correct" a tampered cell into consistency; disagreement → `NOT_EVALUATED`, never a silent
-pick. See [ADR-004](architecture/ADR-004-v2-progressive-evidence-architecture.md) §5.2.)
-
-**Live, in front of them:**
-- Open `samples/hard/statement_genuine.png` in any image editor, change one balance digit, save, and
-  drag it in. The verdict flips to REJECTED and the finding names the **new** broken figure. The
-  output moves with the input — it's recomputing, not pattern-matching.
-- Drag the genuine and tampered versions back to back: APPROVED ↔ REJECTED from a one-figure change.
-
-**In the test suite (every detector ships a genuine-vs-adversarial pair + must-fail fixtures):**
+In the test suite, every detector ships with a genuine-versus-adversarial pair and the fraud system
+has dedicated must-fail fixtures:
 ```bash
 cd backend && source .venv/bin/activate
-python -m pytest -q                         # 282 tests, all green
-python -m pytest tests/test_hard_fixtures.py -v      # the realistic corpus, asserted end-to-end
-python -m pytest tests/test_constant_return_guard.py -v   # proves a constant-return analyzer FAILS
-python -m pytest tests/test_camera_ws.py -v          # the live-capture wire path, end-to-end
-python -m pytest tests/test_signature.py -v          # appended-bytes MUST be tampered; self-signed MUST NOT verify
+python -m pytest -q                                       # full suite
+python -m pytest tests/test_constant_return_guard.py -v   # proves a constant-return analyzer fails
+python -m pytest tests/test_camera_ws.py -v                # live-capture path, end to end
+python -m pytest tests/test_signature.py -v                 # appended-bytes must fail, self-signed must not verify
 ```
-The litmus the suite enforces (CLAUDE.md §3.2): *if you replaced any analyzer with `return <constant>`,
-its test would fail* — because a constant can't pass the genuine artifact **and** flag the forged one.
+The rule the suite enforces (see `CLAUDE.md` section 3.2): if you replaced any analyzer with
+`return <constant>`, its test would fail, because a constant output can't pass a genuine document and
+flag a forged one at the same time.
 
-**Regenerate the whole corpus from scratch** (nothing is a hand-tuned binary):
+The full synthetic corpus is regenerable from scratch, nothing in it is a hand-edited binary:
 ```bash
 python samples/generate.py
+python samples/generate_real_corpus.py
+python scripts/generate_full_bundles.py
 ```
 
----
+## 6. The security spine, in short
 
-## 6. The cybersecurity spine (talking points)
-
-- **Applied PKI, done right.** Full chain-to-pinned-anchor validation, `/ByteRange` coverage, and
-  shadow-attack detection — not "a signature is present."
-- **Fail-closed everywhere.** Any error, timeout, or indeterminate aggregate degrades to **REVIEW**,
-  never auto-APPROVE. A crashing analyzer never crashes the verdict. (Try it: the camera with no
-  motion, or an unparsable upload, both land safe.)
-- **Tamper-evident audit.** Every verdict is appended to a **hash-chained** ledger; `/api/health`
-  reports `audit_chain_intact`. Editing any past record breaks the chain at that row.
-- **Privacy by design.** Camera frames live in memory for the session only and are never persisted;
-  no document bytes or PII are logged; the audit stores decision metadata, not imagery. Password-locked
-  PDFs are decrypted **in memory** and never re-saved (the password is held only for the request).
-- **The explainer can't decide.** The narrator / copilot is read-only and **firewalled** off the verdict
-  — any narrative that contradicts the deterministic verdict is discarded, and an LLM failure degrades to
-  a deterministic narrative. Even a prompt-injected explainer can never approve a fraud.
-- **The model reads; deterministic rules decide.** **No ML/VLM sits in the decision path** — the VLM
-  is an untrusted, box-grounded, cross-read-verified *input* with zero decision authority; cryptography
-  + `Decimal` rules + logic set the verdict. Determinism holds **from the claim graph onward**, so the
-  same claim graph + config always yields the same, fully-traceable verdict; the cloud-POC VLM read is
-  bounded by the numeric cross-read, and the self-hosted production path (Qwen2.5-VL pinned
-  in-perimeter) restores full extraction reproducibility too.
+- Full chain-to-pinned-anchor signature validation, byte-range coverage checks, and detection of
+  bytes appended after signing, not just "a signature is present."
+- Fail closed everywhere. Any error, timeout, or indeterminate result degrades to REVIEW, never
+  auto-approve. One analyzer crashing never crashes the overall verdict.
+- A hash-chained, tamper-evident audit log. `/api/health` reports whether the chain is intact;
+  editing any past record breaks the chain at that point.
+- Camera frames live in memory for the session only and are never persisted. No document content or
+  personal data is written to logs. Password-protected PDFs are decrypted in memory only, for the
+  duration of the request.
+- The narrator and copilot are read-only and firewalled off the verdict. Any narrative that
+  contradicts the real decision gets discarded before it reaches the user.
+- No model sits in the decision path. The vision-language model is treated as untrusted input with
+  zero decision authority; cryptography, arithmetic, and rule logic set the verdict, and the same
+  claim graph with the same configuration always produces the same, fully traceable result.
 
 ---
 
-## 7. Quick reference — sample → verdict
-
-| Sample | Tab | Verdict |
-|---|---|---|
-| `hard/signed_statement_genuine.pdf` | File upload | ✅ APPROVED · source-verified |
-| `hard/signed_statement_shadow_attacked.pdf` | File upload | ❌ REJECTED · tampered |
-| `hard/statement_genuine.png` | File upload | ✅ APPROVED |
-| `hard/statement_tampered.png` | File upload | ❌ REJECTED · arithmetic |
-| `pdfs/genuine_signed.pdf` | File upload | ✅ APPROVED · source-verified |
-| `pdfs/attacker_self_signed.pdf` | File upload | ⚠️ REVIEW · issuer unconfirmed (intact signature, chain not pinned; not "tampered") |
-| `pdfs/appended_after_signature.pdf` | File upload | ❌ REJECTED · tampered (content altered after signing) |
-| `pdfs/unsigned.pdf` | File upload | ⚠️ REVIEW |
-| `statements/genuine_statement.png` | File upload | ✅ APPROVED |
-| `statements/tampered_statement.png` | File upload | ❌ REJECTED |
-| `bundle_consistent/` (both) | Document bundle | ⚠️ REVIEW · corroborated |
-| `bundle_mismatch/` (both) | Document bundle | ❌ REJECTED · identity mismatch |
-| live document + tilt | Live capture | live verdict (challenge result) |
-
-*Verdicts observed end-to-end on 2026-06-28. Trust anchor = `samples/trust/`. Scores are deterministic
-given the same config.*
+Verdicts above were observed end to end against the trust anchor in `samples/trust/`. Scores are
+deterministic given the same configuration.

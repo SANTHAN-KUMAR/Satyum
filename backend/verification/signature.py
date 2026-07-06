@@ -38,6 +38,30 @@ from app.contracts import AnalysisContext, LayerSignal, Mode
 
 logger = logging.getLogger(__name__)
 
+# --- Start: asn1crypto monkey-patch for malformed Indian Gov PDFs ---
+# Indian Gov portals (TNREGINET, IGRS) generate CMS signatures where strict ASN.1
+# 'constructed' sequences are encoded as 'primitive'. We patch asn1crypto to retry
+# and force the 'constructed' bit on primitive parse failures.
+import asn1crypto.core
+
+_orig_build = asn1crypto.core._build
+
+def _lenient_build(*args, **kwargs):
+    args_list = list(args)
+    # If method is 0 (primitive), but could be a malformed constructed type
+    if len(args_list) > 1 and args_list[1] == 0:
+        try:
+            return _orig_build(*args, **kwargs)
+        except ValueError as e:
+            if "method should have been constructed, but primitive was found" in str(e):
+                args_list[1] = 1  # force constructed
+                return _orig_build(*args_list, **kwargs)
+            raise
+    return _orig_build(*args, **kwargs)
+
+asn1crypto.core._build = _lenient_build
+# --- End: asn1crypto monkey-patch ---
+
 # Provenance states surfaced in measurements['provenance'] (shared vocabulary with the UI/Provenance).
 PROV_VERIFIED = "verified"  # intact + chains to a pinned anchor + covers the whole file + not revoked
 PROV_TAMPERED = "tampered"  # present but INVALID: appended bytes / bad digest / revoked cert
@@ -132,6 +156,31 @@ def _load_crls(anchor_dir: Path) -> list[Any]:
             except (ValueError, OSError) as exc:
                 logger.warning("skipping unparsable CRL %s: %s", path.name, exc)
     return crls
+
+
+def _cms_signing_time(emb: Any) -> Any:
+    """The CMS 'signing-time' SIGNED attribute (RFC 5652 §11.3), read directly from the embedded
+    signature's ``SignerInfo`` — independent of whether certificate-chain validation succeeds.
+
+    It is a *signed* attribute: covered by the same digest computation the signature's ``intact``
+    check verifies, so an attacker cannot alter this claimed time without invalidating the whole
+    signature. This makes it a legitimate (if not TSA-independent) basis for point-in-time certificate
+    validation when no embedded RFC3161 timestamp is present. Returns ``None`` if absent or malformed
+    — never fabricates a time.
+    """
+    try:
+        signed_attrs = emb.signed_data["signer_infos"][0]["signed_attrs"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if signed_attrs.native is None:
+        return None
+    for attr in signed_attrs:
+        try:
+            if attr["type"].native == "signing_time":
+                return attr["values"][0].native
+        except (KeyError, IndexError, ValueError):
+            continue
+    return None
 
 
 def _timestamp_info(status: Any) -> dict[str, Any] | None:
@@ -273,6 +322,8 @@ class PadesSignatureAnalyzer:
                 f"no pinned trust anchors loaded from {anchor_dir} — cannot verify chain",
             )
 
+        crls = _load_crls(anchor_dir)
+
         try:
             reader = PdfFileReader(io.BytesIO(ctx.file_bytes), strict=False)
             # Encrypted (password-protected) PDF: decrypt IN MEMORY with the applicant-supplied password
@@ -289,6 +340,14 @@ class PadesSignatureAnalyzer:
                 reader.decrypt(ctx.pdf_password)
             embedded = list(reader.embedded_signatures)
         except Exception as exc:  # noqa: BLE001 — malformed PDF is ordinary bad input, fail-closed
+            # pyHanko parses every /Contents as a CMS ContentInfo and raises on the legacy
+            # /adbe.x509.rsa_sha1 sub-filter some (esp. older Indian govt e-registration) portals still
+            # use — a different container format, not a malformed document. Try that real verification
+            # path before giving up (never let "we don't speak this container" masquerade as "unparsable
+            # garbage" when it's actually a well-understood, verifiable legacy format).
+            legacy_signal = self._analyze_legacy_rsa_sha1(ctx, trust_roots, crls)
+            if legacy_signal is not None:
+                return legacy_signal
             logger.warning("could not parse PDF for signature extraction: %r", exc)
             return LayerSignal.error(self.name, self.layer, self.mode, f"unparsable PDF: {exc!r}")
 
@@ -307,7 +366,6 @@ class PadesSignatureAnalyzer:
         # Real revocation: production fetches CRL/OCSP from the certificate's endpoints
         # (settings.signature_allow_fetching=True); offline / air-gapped deployments pin CRLs next to
         # the anchors (<anchor_dir>/crls). revocation_mode is the certvalidator policy (§10).
-        crls = _load_crls(anchor_dir)
         vc = ValidationContext(
             trust_roots=trust_roots,
             crls=crls,
@@ -334,7 +392,12 @@ class PadesSignatureAnalyzer:
         for idx, emb in enumerate(embedded):
             revoked = False
             ts_info: dict[str, Any] | None = None
-            signer_time: str | None = None
+            srdt: Any = None
+            # Read the CMS 'signing-time' SIGNED attribute (RFC 5652 §11.3) directly, independently of
+            # whether path validation below succeeds — it is a *signed* attribute (covered by the same
+            # digest we verify as intact), so it is exactly as tamper-evident as the rest of the
+            # signature, regardless of what the certificate-chain outcome turns out to be.
+            independent_signing_time = _cms_signing_time(emb)
             try:
                 status = validate_pdf_signature(
                     emb,
@@ -349,21 +412,75 @@ class PadesSignatureAnalyzer:
                 # the CRL/OCSP and found revoked. Under hard-fail it raises instead (handled below).
                 revoked = bool(getattr(status, "revoked", False))
                 ts_info = _timestamp_info(status)
-                srdt = getattr(status, "signer_reported_dt", None)
-                signer_time = srdt.isoformat() if srdt is not None else None
+                srdt = getattr(status, "signer_reported_dt", None) or independent_signing_time
             except PathValidationError as exc:
                 # Chain failed to reach a pinned anchor (attacker / self-signed cert) OR — under
-                # hard-fail revocation — the cert is revoked (RevokedError is a PathValidationError).
+                # hard-fail revocation — the cert is revoked (RevokedError is a PathValidationError) OR
+                # the cert's validity WINDOW has since passed (handled by the point-in-time retry below).
                 revoked = isinstance(exc, RevokedError) or "revoked" in str(exc).lower()
                 logger.info("signature %d path validation failed (revoked=%s): %s", idx, revoked, exc)
                 intact = valid = trusted = False
                 coverage = SignatureCoverageLevel.UNCLEAR
+                srdt = independent_signing_time
             except Exception as exc:  # noqa: BLE001 — a per-signature failure must not pass-through
+                if type(exc).__name__ == "SignatureValidationError" and (
+                    "recognized SubFilter type" in str(exc)
+                ):
+                    # A genuinely different, unrecognized signature container (e.g. the real-world
+                    # /adbe.pkcs7.sha1 variant) — not a corrupt document. Route to forensic fallback,
+                    # never a fabricated "tampered" verdict for a format gap (§3.1).
+                    logger.warning("signature %d uses unsupported subfilter: %r", idx, exc)
+                    return LayerSignal.not_evaluated(
+                        self.name,
+                        self.layer,
+                        self.mode,
+                        f"signature uses an unsupported format ({exc!s}) — routing to forensic fallback",
+                        provenance=PROV_ABSENT,
+                        provenance_result=PROV_RESULT_NO_SOURCE,
+                        method="PAdES",
+                    )
                 logger.warning("signature %d validation raised: %r", idx, exc)
                 intact = valid = trusted = False
                 coverage = SignatureCoverageLevel.UNCLEAR
+                srdt = independent_signing_time
 
             covers_whole = coverage == SignatureCoverageLevel.ENTIRE_FILE
+
+            # Point-in-time retry: rescues a signature made with a genuinely short-lived certificate —
+            # a real, common pattern for Indian govt e-Sign (Aadhaar eSign / Protean / DigiLocker issue
+            # certs valid for only ~30 minutes, scoped to one signing act) which will look "expired" to
+            # any validation performed after the fact, even though it was completely valid when signed.
+            # Safe by construction: `moment` only changes the certificate's validity-PERIOD check; it
+            # cannot change which root a chain resolves to, so an attacker/self-signed/wrong-issuer
+            # chain fails identically at any moment — this can only rescue an otherwise-legitimate,
+            # correctly-pinned chain, never launder an untrusted one (CLAUDE.md §3.1).
+            point_in_time_validated = False
+            if not trusted and intact and valid and covers_whole and not revoked and srdt is not None:
+                try:
+                    # moment= cannot combine with allow_fetching=True (pyhanko_certvalidator); revocation
+                    # evidence for a point-in-time check must come from the pinned CRLs, never a live
+                    # fetch keyed to "now". retroactive_revinfo=True: a CRL published AFTER the signing
+                    # moment is still valid evidence that the cert was NOT revoked at that moment (CRLs
+                    # only ever add revocations, they don't retract them) — required here because a
+                    # short-lived cert's own real-time CRL cannot have existed yet at signing time.
+                    retry_vc = ValidationContext(
+                        trust_roots=trust_roots,
+                        crls=crls,
+                        allow_fetching=False,
+                        revocation_mode=self._revocation_mode,
+                        moment=srdt,
+                        retroactive_revinfo=True,
+                    )
+                    retry_status = validate_pdf_signature(
+                        emb, signer_validation_context=retry_vc, ts_validation_context=ts_vc
+                    )
+                    if retry_status.trusted and retry_status.intact and retry_status.valid:
+                        trusted = True
+                        point_in_time_validated = True
+                except Exception as exc:  # noqa: BLE001 — a failed retry just keeps the original result
+                    logger.info("signature %d point-in-time retry failed: %r", idx, exc)
+
+            signer_time = srdt.isoformat() if srdt is not None else None
             sig_verified = intact and valid and trusted and covers_whole and not revoked
             all_verified = all_verified and sig_verified
             whole_file_covered = whole_file_covered or covers_whole
@@ -379,6 +496,10 @@ class PadesSignatureAnalyzer:
                     "revoked": revoked,  # CRL/OCSP says the signing certificate is revoked
                     "timestamp": ts_info,  # embedded RFC3161 timestamp validity (or None)
                     "signer_reported_time": signer_time,
+                    # True iff trust was only established by re-checking the chain as of the signed
+                    # signing-time attribute, not "now" — the cert had since expired (short-lived
+                    # e-Sign cert), but was genuinely valid, chained, and unrevoked at the time it signed.
+                    "point_in_time_validation": point_in_time_validated,
                 }
             )
 
@@ -409,6 +530,11 @@ class PadesSignatureAnalyzer:
             measurements["signer_issuer_cn"] = identity["issuer_cn"]
             ts0 = per_sig[0].get("timestamp")
             ts_note = f"; RFC3161 timestamp validated ({ts0['time']})" if ts0 and ts0.get("trusted") else ""
+            if not ts_note and any(s.get("point_in_time_validation") for s in per_sig):
+                # No RFC3161 timestamp, but the chain was confirmed valid AS OF the signed CMS
+                # signing-time attribute — the common short-lived-cert e-Sign pattern (§ above).
+                signed_at = per_sig[0]["signer_reported_time"]
+                ts_note = f"; certificate had since expired but was valid when signed ({signed_at})"
             return LayerSignal.valid(
                 self.name,
                 self.layer,
@@ -470,6 +596,153 @@ class PadesSignatureAnalyzer:
             SUSPICION_TAMPERED,
             PROVENANCE_WEIGHT,
             f"PAdES signature INVALID — tampering evidence ({detail})",
+            measurements=measurements,
+        )
+
+    def _analyze_legacy_rsa_sha1(
+        self, ctx: AnalysisContext, trust_roots: list[Any], crls: list[Any]
+    ) -> LayerSignal | None:
+        """Real verification for the legacy ``/adbe.x509.rsa_sha1`` PDF signature format — see
+        ``verification/legacy_pdf_signature.py`` for why pyHanko's CMS-only parser raises on it.
+
+        Returns ``None`` if the PDF carries no such signature field at all — the caller then falls
+        back to the original "unparsable PDF" error, unchanged, for a genuinely broken/unknown PDF.
+        """
+        from verification.legacy_pdf_signature import (
+            RSA_SHA1_SUB_FILTER,
+            extract_signature_fields,
+            validate_chain_with_point_in_time,
+            verify_rsa_sha1,
+        )
+
+        if ctx.file_bytes is None:
+            return None
+
+        fields = [
+            f for f in extract_signature_fields(ctx.file_bytes) if f["sub_filter"] == RSA_SHA1_SUB_FILTER
+        ]
+        if not fields:
+            return None  # some OTHER parse failure — not this legacy format; let the caller error out
+
+        per_sig: list[dict[str, Any]] = []
+        all_verified = True
+        whole_file_covered = False
+        leaf_certs: list[Any] = []
+
+        for idx, field in enumerate(fields):
+            result = verify_rsa_sha1(ctx.file_bytes, field)
+            intact = valid = bool(result["intact"])
+            covers_whole = bool(result["covers_whole_file"])
+            leaf = result["certificate"]
+            trusted = False
+            point_in_time_validated = False
+            if leaf is not None and intact:
+                trusted, point_in_time_validated = validate_chain_with_point_in_time(
+                    leaf,
+                    trust_roots=trust_roots,
+                    crls=crls,
+                    revocation_mode=self._revocation_mode,
+                    signing_time=field.get("signing_time"),
+                )
+            if leaf is not None:
+                leaf_certs.append(leaf)
+
+            sig_verified = intact and valid and trusted and covers_whole
+            all_verified = all_verified and sig_verified
+            whole_file_covered = whole_file_covered or covers_whole
+
+            per_sig.append(
+                {
+                    "index": idx,
+                    "intact": intact,
+                    "valid": valid,
+                    "trusted": trusted,
+                    "covers_whole_file": covers_whole,
+                    "coverage": "ENTIRE_FILE" if covers_whole else "PARTIAL",
+                    "revoked": False,  # not independently tracked for this format (module docstring)
+                    "timestamp": None,  # no RFC3161 timestamp mechanism in this legacy format
+                    "signer_reported_time": (
+                        field["signing_time"].isoformat() if field.get("signing_time") else None
+                    ),
+                    "point_in_time_validation": point_in_time_validated,
+                    "error": result.get("error"),
+                }
+            )
+
+        verified = all_verified and whole_file_covered
+        measurements: dict[str, Any] = {
+            "provenance": PROV_VERIFIED if verified else PROV_TAMPERED,
+            "provenance_result": PROV_RESULT_VERIFIED if verified else PROV_RESULT_TAMPERED,
+            "method": "legacy_rsa_sha1",
+            "signature_count": len(fields),
+            "anchors_pinned": len(trust_roots),
+            "crls_loaded": len(crls),
+            "revocation_mode": self._revocation_mode,
+            "online_revocation": False,  # moment-based retry never allows live fetching
+            "signatures": per_sig,
+        }
+
+        if verified:
+            ctx.shared["provenance_verified"] = True
+            leaf = leaf_certs[0] if leaf_certs else None
+            subject_cn = issuer_cn = None
+            if leaf is not None:
+                try:
+                    subject_cn = leaf.subject.native.get("common_name")
+                    issuer_cn = leaf.issuer.native.get("common_name")
+                except Exception:  # noqa: BLE001 — identity label is best-effort, never load-bearing
+                    pass
+            ctx.shared["signer_identity"] = {"subject_cn": subject_cn, "issuer_cn": issuer_cn}
+            measurements["signer_subject_cn"] = subject_cn
+            measurements["signer_issuer_cn"] = issuer_cn
+            pit_note = ""
+            if any(s["point_in_time_validation"] for s in per_sig):
+                signed_at = per_sig[0]["signer_reported_time"]
+                pit_note = f"; certificate had since expired but was valid when signed ({signed_at})"
+            return LayerSignal.valid(
+                self.name,
+                self.layer,
+                self.mode,
+                SUSPICION_VERIFIED,
+                PROVENANCE_WEIGHT,
+                "Legacy PDF signature (adbe.x509.rsa_sha1) verified: RSA-SHA1 signature intact, "
+                f"chains to a pinned trust anchor, covers the whole file{pit_note}",
+                measurements=measurements,
+            )
+
+        # Same carve-out as the CMS path (CLAUDE.md §3.1/§3.3): a cryptographically intact, unaltered
+        # signature whose ONLY failure is an unpinned issuer is "source not confirmed", never tampering.
+        content_intact_all = all(s["intact"] and s["valid"] and s["covers_whole_file"] for s in per_sig)
+        if content_intact_all:
+            untrusted_idx = [s["index"] for s in per_sig if not s["trusted"]]
+            measurements["provenance"] = PROV_UNVERIFIED_ISSUER
+            measurements["provenance_result"] = PROV_RESULT_NO_SOURCE
+            return LayerSignal.not_evaluated(
+                self.name,
+                self.layer,
+                self.mode,
+                "legacy PDF signature (adbe.x509.rsa_sha1) is cryptographically valid and the document "
+                f"is unaltered, but the signer's certificate does not chain to a pinned trust anchor "
+                f"(sig {untrusted_idx}) — issuer not confirmed. Routing to forensic verification.",
+                **measurements,
+            )
+
+        reasons = []
+        for s in per_sig:
+            if s.get("error"):
+                reasons.append(f"sig {s['index']}: {s['error']}")
+            elif not s["intact"]:
+                reasons.append(f"sig {s['index']}: RSA signature does not match the document bytes")
+            elif not s["covers_whole_file"]:
+                reasons.append(f"sig {s['index']}: does not cover the entire file")
+        detail = "; ".join(reasons) or "signature present but did not verify"
+        return LayerSignal.valid(
+            self.name,
+            self.layer,
+            self.mode,
+            SUSPICION_TAMPERED,
+            PROVENANCE_WEIGHT,
+            f"legacy PDF signature (adbe.x509.rsa_sha1) INVALID — tampering evidence ({detail})",
             measurements=measurements,
         )
 

@@ -155,6 +155,8 @@ export function parseServerMessage(v: unknown): ServerMessage | null {
         typeof v.expires_at_ms === "number"
         ? (v as unknown as ServerMessage)
         : null;
+    case "armed":
+      return typeof v.expires_at_ms === "number" ? (v as unknown as ServerMessage) : null;
     case "tier_status":
       return Array.isArray(v.signals) && v.signals.every(isPackSignal)
         ? (v as unknown as ServerMessage)

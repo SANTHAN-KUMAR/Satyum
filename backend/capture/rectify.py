@@ -79,11 +79,14 @@ def _order_quad(pts: np.ndarray) -> np.ndarray:
     )
 
 
-def find_document_quad(bgr: np.ndarray) -> np.ndarray | None:
+def find_document_quad(bgr: np.ndarray, min_area_frac: float = _MIN_QUAD_AREA_FRAC) -> np.ndarray | None:
     """Return the document's 4 corner points (float32, 4x2) or ``None`` if no quad is found.
 
     grayscale -> Gaussian blur -> Canny -> dilate -> external contours; the largest convex
-    4-vertex polygon covering >= ``_MIN_QUAD_AREA_FRAC`` of the frame wins.
+    4-vertex polygon covering >= ``min_area_frac`` of the frame wins. ``min_area_frac`` defaults to
+    this module's own quality-gate bar (``_MIN_QUAD_AREA_FRAC``); a caller with a lower bar (e.g.
+    ``capture/challenge.py`` biasing corner-seed placement, where a missed/approximate quad only
+    means falling back to unmasked seeding, never a false pass/fail) may pass a smaller value.
     """
     if bgr is None or bgr.ndim != 3 or bgr.shape[2] != 3:
         return None
@@ -107,7 +110,7 @@ def find_document_quad(bgr: np.ndarray) -> np.ndarray | None:
         if (
             len(approx) == 4
             and cv2.isContourConvex(approx)
-            and cv2.contourArea(approx) >= _MIN_QUAD_AREA_FRAC * frame_area
+            and cv2.contourArea(approx) >= min_area_frac * frame_area
         ):
             return _order_quad(approx)
     return None

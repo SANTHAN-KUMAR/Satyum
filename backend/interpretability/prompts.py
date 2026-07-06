@@ -25,4 +25,6 @@ Rules:
 2. The deterministic verdict is FINAL. You cannot change it.
 3. Keep responses brief and directly answer the question.
 4. If asked about a specific signal, use the `get_signal_detail` tool.
+5. IMPORTANT: You MUST use native JSON tool calling. DO NOT output raw DSML, XML, or function tags like '< | | DSML' in your conversational text responses.
+6. When presenting data in a table, ALWAYS use standard Markdown table syntax. NEVER wrap the table inside a ```markdown or ``` code block, as it will break the UI renderer. Do NOT output raw HTML tables.
 """

@@ -85,3 +85,28 @@ def test_add_document_accumulates_and_unknown_case_raises():
         raise AssertionError("adding to an unknown case must raise")
     except KeyError:
         pass
+
+
+def test_add_document_persists_the_full_evidence_pack():
+    """The case-level Underwriter Copilot needs each document's full evidence pack, not just its
+    identity+verdict, to answer a question about ANY document in the case (not only the latest one)."""
+    store = CaseStore()
+    case = store.create(applicant_ref=None, consent_id=None, now=NOW)
+    pack = {"session_id": "s1", "verdict": "APPROVED", "trust_score": 92, "signals": [{"name": "x"}]}
+    store.add_document(
+        case.case_id, label="bank_statement", entities=_statement_doc(), verdict="APPROVED",
+        now=NOW, evidence_pack=pack,
+    )
+    stored = store.get(case.case_id).documents[0]
+    assert stored.evidence_pack == pack
+    assert stored.evidence_pack is not pack  # not the same object the caller still holds a reference to
+    pack["trust_score"] = 0  # mutating the caller's copy afterward must not affect the stored one
+    assert stored.evidence_pack["trust_score"] == 92
+
+
+def test_add_document_evidence_pack_defaults_to_none():
+    """A caller that doesn't pass evidence_pack (e.g. a pre-migration document) must not crash."""
+    store = CaseStore()
+    case = store.create(applicant_ref=None, consent_id=None, now=NOW)
+    store.add_document(case.case_id, label="pan", entities=_pan_doc(), verdict="REVIEW", now=NOW)
+    assert store.get(case.case_id).documents[0].evidence_pack is None

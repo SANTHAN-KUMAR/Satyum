@@ -290,17 +290,32 @@ export interface BundleTrustScore {
 
 export type ChallengeKind = "tilt-left" | "tilt-right" | "tilt-up" | "tilt-down" | "rotate-cw" | "rotate-ccw" | "move-closer" | "move-away";
 
-/** Server -> client: issue/refresh the active physical challenge. */
+/** Server -> client: issue/refresh the active physical challenge.
+ *
+ * ``expires_at_ms`` here is INDICATIVE only — the real TTL clock does not start until the client
+ * arms the attempt (``ClientStartAttemptMessage``) and the server replies with the authoritative
+ * deadline in ``ServerArmedMessage``. This is deliberate: a user reading the instruction and
+ * positioning the document should never be racing a countdown that started before they could act.
+ */
 export interface ServerChallengeMessage {
   type: "challenge";
   challenge_id: string;
   kind: ChallengeKind;
   instruction: string; // human-readable command, e.g. "Tilt the document's left edge toward the camera"
-  expires_at_ms: number; // epoch ms; the challenge nonce is time-bounded (anti-replay)
+  expires_at_ms: number;
   // The authoritative command the analyzer verifies (axis + magnitude; direction in `kind` is a
   // human cue, not separately verified — see verify.py). Present on the wire; not required by the UI.
   axis?: "x" | "y";
   magnitude_deg?: number;
+  // How many more in-session retries are available after THIS challenge, if this attempt fails.
+  retries_remaining?: number;
+}
+
+/** Server -> client: acks a `start_attempt` — the real, server-enforced TTL deadline for THIS
+ * attempt, starting now (not at challenge issue). */
+export interface ServerArmedMessage {
+  type: "armed";
+  expires_at_ms: number;
 }
 
 /** Server -> client: live per-tier / per-signal status as the pipeline runs on streamed frames. */
@@ -323,6 +338,7 @@ export interface ServerNoticeMessage {
 
 export type ServerMessage =
   | ServerChallengeMessage
+  | ServerArmedMessage
   | ServerTierStatusMessage
   | ServerResultMessage
   | ServerNoticeMessage;
@@ -341,4 +357,27 @@ export interface ClientHelloMessage {
   doc_type: string | null;
 }
 
-export type ClientMessage = ClientFrameMessage | ClientHelloMessage;
+/** Client -> server: signal readiness for the CURRENT challenge — this is what starts the real
+ * TTL clock server-side and unblocks frame buffering; frames sent before this are ignored. */
+export interface ClientStartAttemptMessage {
+  type: "start_attempt";
+}
+
+/** Client -> server: score the buffered frames now, rather than waiting for the TTL/frame-count trigger. */
+export interface ClientScoreMessage {
+  type: "score";
+}
+
+/** Client -> server: after a failed/unmet attempt, request a fresh challenge on the SAME connection
+ * (no camera/socket teardown). Bounded server-side by `_MAX_CHALLENGE_RETRIES` — rejected once
+ * exhausted (fail-closed; the last scored verdict stands). */
+export interface ClientRetryMessage {
+  type: "retry";
+}
+
+export type ClientMessage =
+  | ClientFrameMessage
+  | ClientHelloMessage
+  | ClientStartAttemptMessage
+  | ClientScoreMessage
+  | ClientRetryMessage;

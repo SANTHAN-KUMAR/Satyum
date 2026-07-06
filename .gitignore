@@ -63,12 +63,27 @@ Real_life_docs/
 .ollama_models/
 .ollama/
 
+# --- VLM extraction cache — caches full extracted document content (names, addresses, account
+# numbers) from whatever was actually run locally, which includes real personal test documents.
+# Never commit: this is derived PII, not a project artifact. ---
+backend/.vlm_cache/
+
 # --- Personal real documents used for local testing — NOT synthetic; keep out of git (PII) ---
 PAN/
 Santhan_bank_statement_forged.pdf
 canara_epassbook_2026.pdf
+demo_bundles/01_User_Tollways_Match/
 
 # --- Local scratch/debug scripts and archives — never project artifacts ---
 satyum-source.zip
 test_ds.py
 test_qwen_groq.py
+.claude/
+Videos/
+
+# --- Internal working docs — kept locally, not part of the public repo ---
+PITCH-SCRIPT.md
+DESIGN.md
+PROBLEM STATEMENT SuRaksha.txt
+hackathon_submission.md
+KNOWN_ISSUES.md

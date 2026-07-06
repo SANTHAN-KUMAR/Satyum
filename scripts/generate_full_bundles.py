@@ -33,9 +33,7 @@ def generate_form_16(output_path: str, employer: str, employee: str, net_pay: fl
     doc.close()
 
 def main():
-    base = "demo_bundles"
-    if os.path.exists(base):
-        shutil.rmtree(base)
+    base = "demo"
     os.makedirs(base, exist_ok=True)
 
     # ---------------------------------------------------------
@@ -43,20 +41,16 @@ def main():
     # ---------------------------------------------------------
     print("Generating base templates...")
     os.makedirs("tmp_templates", exist_ok=True)
-    
-    # Template A: Corpus Person (Apeiron)
-    generate_salary_slip("tmp_templates/slip_apeiron.pdf", "APEIRON PROJECTS PRIVATE LIMITED", "KARNALA SANTHAN KUMAR", 580000.00)
-    generate_form_16("tmp_templates/f16_apeiron.pdf", "APEIRON PROJECTS PRIVATE LIMITED", "KARNALA SANTHAN KUMAR", 580000.00)
 
-    # Template B: User Person (Tollways)
-    generate_salary_slip("tmp_templates/slip_tollways.pdf", "TOLLWAYS INFRA PROJECTS PRIVATE LIMITED", "KARNALA SANTHAN KUMAR", 200000.00)
-    generate_form_16("tmp_templates/f16_tollways.pdf", "TOLLWAYS INFRA PROJECTS PRIVATE LIMITED", "KARNALA SANTHAN KUMAR", 200000.00)
+    # Synthetic applicant used across every full-bundle demo fixture.
+    generate_salary_slip("tmp_templates/slip_apeiron.pdf", "APEIRON PROJECTS PRIVATE LIMITED", "ARJUN MENON", 580000.00)
+    generate_form_16("tmp_templates/f16_apeiron.pdf", "APEIRON PROJECTS PRIVATE LIMITED", "ARJUN MENON", 580000.00)
 
     # ---------------------------------------------------------
     # 2. Build Bundles via fast file copying
     # ---------------------------------------------------------
     print("Assembling bundles...")
-    
+
     def assemble(name, stmt, aadhaar, slip, f16):
         d = os.path.join(base, name)
         os.makedirs(d, exist_ok=True)
@@ -65,23 +59,15 @@ def main():
         shutil.copy(slip, os.path.join(d, "salary_slip.pdf"))
         shutil.copy(f16, os.path.join(d, "form_16.pdf"))
 
-    # Bundle 1: Your Clean Bundle
-    assemble("01_User_Tollways_Match", 
-             "652591331-Canara-Bank-Statement.pdf", "aadhars/my aadhar.pdf",
-             "tmp_templates/slip_tollways.pdf", "tmp_templates/f16_tollways.pdf")
-
-    # Bundle 2: Corpus Clean Bundle
-    assemble("02_Corpus_Clean_Match", 
+    assemble("04_full_bundle_clean_match",
              "samples/real_corpus/canara_direct/genuine.pdf", "samples/real_corpus/identity/aadhaar_genuine.pdf",
              "tmp_templates/slip_apeiron.pdf", "tmp_templates/f16_apeiron.pdf")
 
-    # Bundle 3: Corpus Tampered Math (Re-uses Apeiron templates)
-    assemble("03_Corpus_Tampered_Math", 
+    assemble("04_full_bundle_tampered_math",
              "samples/real_corpus/canara_direct/tamper_closing_balance.pdf", "samples/real_corpus/identity/aadhaar_genuine.pdf",
              "tmp_templates/slip_apeiron.pdf", "tmp_templates/f16_apeiron.pdf")
-             
-    # Bundle 4: Corpus Identity Mismatch
-    assemble("04_Corpus_Identity_Mismatch", 
+
+    assemble("04_full_bundle_identity_mismatch",
              "samples/real_corpus/canara_direct/genuine.pdf", "samples/real_corpus/identity/aadhaar_name_mismatch.pdf",
              "tmp_templates/slip_apeiron.pdf", "tmp_templates/f16_apeiron.pdf")
 

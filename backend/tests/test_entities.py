@@ -29,6 +29,26 @@ def _name_claim_graph(name: str) -> ClaimGraph:
     return cg
 
 
+def _pan_claim_graph(pan: str, *, page: int = 0) -> ClaimGraph:
+    cg = ClaimGraph(doc_id="d1")
+    cg.add(Claim(
+        subject="applicant", predicate="pan", value=pan, value_type="PAN", index=None,
+        provenance=ClaimProvenance(doc_id="d1", confidence=0.9, source="vlm:test", page=page),
+    ))
+    return cg
+
+
+def _real_pdf_bytes(page_text: str) -> bytes:
+    """A minimal, genuinely-parseable one-page PDF with real printed text (PyMuPDF-authored) — needed
+    to exercise the PAN page-presence re-read for real, not the `b"%PDF-1.4"` placeholder other tests
+    use (which is enough to satisfy ``is_pdf()`` but not enough to actually open/read)."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=200)
+    page.insert_text((20, 40), page_text, fontsize=12)
+    return doc.tobytes()
+
+
 def _valid_aadhaar(base: str = "23456789012") -> str:
     return base + str(verhoeff_check_digit(base))
 
@@ -203,6 +223,64 @@ def test_vlm_name_reading_overrides_a_misread_ocr_name():
     )
     EntityExtractionAnalyzer().analyze(ctx)
     assert ctx.shared["entities"].name == "KARNALA VAMSI KRISHNA"
+
+
+def test_hallucinated_vlm_pan_not_printed_anywhere_is_never_trusted():
+    """MUST-FAIL FIXTURE: PAN's ontology type is 'validated' (format-only) — builder.py never
+    box-grounds or cross-reads it the way a Money claim is. Left unguarded, a VLM's freeform 'pan'
+    field would drive ClaimedIdentityAnalyzer's identity-mismatch accusation purely on the model's
+    say-so. Here the page's REAL text has no PAN at all (a real, genuine bank statement) but the VLM
+    claim graph invents one anyway — the fix must refuse to trust it. Would FAIL (entities.pan would
+    be set to the invented value) against the pre-fix code, which trusted `cg.first("pan")` unchecked.
+    """
+    pdf = _real_pdf_bytes("Statement for A/c XXXXXXXXXX6385\nOpening Balance 3,770.09")
+    cg = _pan_claim_graph("ZZZZZ0000Z", page=0)  # hallucinated — not printed anywhere on the page
+    ctx = AnalysisContext(
+        session_id="s", intake_mode=Mode.FILE, file_bytes=pdf, shared={"claim_graph": cg},
+    )
+    EntityExtractionAnalyzer().analyze(ctx)
+    assert ctx.shared["entities"].pan is None
+
+
+def test_genuinely_printed_vlm_pan_is_trusted():
+    """The converse of the fixture above: a PAN the VLM read that IS actually printed on its claimed
+    page must still be usable (the fix must not blanket-disable the VLM PAN fallback, only require it
+    be independently confirmed)."""
+    pdf = _real_pdf_bytes("Applicant PAN: ABCDE1234F\nName: Jane Doe")
+    cg = _pan_claim_graph("ABCDE1234F", page=0)  # genuinely printed on this page
+    ctx = AnalysisContext(
+        session_id="s", intake_mode=Mode.FILE, file_bytes=pdf, shared={"claim_graph": cg},
+    )
+    EntityExtractionAnalyzer().analyze(ctx)
+    assert ctx.shared["entities"].pan == "ABCDE1234F"
+
+
+def test_pan_confirmed_on_a_different_page_than_claimed_is_not_trusted():
+    """A PAN claim pointing at the WRONG page (e.g. a mis-tagged multi-page extraction) must not be
+    confirmed by a match elsewhere in the document — the check is scoped to the claim's own page."""
+    pdf = _real_pdf_bytes("Statement for A/c XXXXXXXXXX6385\nOpening Balance 3,770.09")
+    cg = _pan_claim_graph("ABCDE1234F", page=3)  # this 1-page PDF has no page 3 at all
+    ctx = AnalysisContext(
+        session_id="s", intake_mode=Mode.FILE, file_bytes=pdf, shared={"claim_graph": cg},
+    )
+    EntityExtractionAnalyzer().analyze(ctx)
+    assert ctx.shared["entities"].pan is None
+
+
+def test_mislabeled_non_pan_value_printed_on_the_page_is_never_trusted():
+    """MUST-FAIL FIXTURE: observed in production — the VLM extracted predicate="pan" with the
+    customer's PHONE NUMBER as the value ("+919989982872"). A page-presence check ALONE would wrongly
+    confirm this (the phone number really is printed on the page) — it just isn't a PAN. The value
+    must also be independently PAN-SHAPED before a presence match can trust it. Would FAIL (entities.pan
+    would be set to the phone number) against the presence-only check, which cannot tell a mislabeled
+    real field from a genuine PAN."""
+    pdf = _real_pdf_bytes("Phone +919989982872\nStatement for A/c XXXXXXXXXX6385")
+    cg = _pan_claim_graph("+919989982872", page=0)  # the VLM mislabeled the phone number as "pan"
+    ctx = AnalysisContext(
+        session_id="s", intake_mode=Mode.FILE, file_bytes=pdf, shared={"claim_graph": cg},
+    )
+    EntityExtractionAnalyzer().analyze(ctx)
+    assert ctx.shared["entities"].pan is None
 
 
 def test_analyzer_not_applicable_on_camera_intake():

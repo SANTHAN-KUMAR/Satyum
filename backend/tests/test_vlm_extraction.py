@@ -250,6 +250,24 @@ def test_negative_and_oversized_boxes_rejected():
     assert ExtractedValue(value="1", bbox=(0.0, 0.0, 1.0, 1.0), confidence=0.9).bbox == (0.0, 0.0, 1.0, 1.0)
 
 
+def test_extracted_field_pixel_space_bbox_is_dropped_to_ungrounded():
+    """MUST-FAIL FIXTURE: observed in production — a reader emitted a scalar field's bbox in raw PIXEL
+    coordinates (e.g. (263.0, 193.0, 281.0, 340.0)) instead of normalised [0,1]. ExtractedValue (a
+    transaction cell) already guards this; ExtractedField (every scalar: opening_balance,
+    closing_balance, pan, ifsc, holder_name, …) previously had NO such validator at all, letting a
+    garbage box straight into a Claim's provenance. Would FAIL (bbox would survive as the raw pixel
+    tuple) against the pre-fix ExtractedField, which declared a bbox field with no validation."""
+    f = ExtractedField(predicate="pan", value="ABCDE1234F", bbox=(263.0, 193.0, 281.0, 340.0), confidence=0.9)
+    assert f.bbox is None
+
+
+def test_extracted_field_in_range_bbox_survives():
+    f = ExtractedField(
+        predicate="opening_balance", value="1000.00", bbox=(0.1, 0.1, 0.2, 0.02), confidence=0.9
+    )
+    assert f.bbox == (0.1, 0.1, 0.2, 0.02)
+
+
 def test_parse_tool_input_drops_malformed_and_unknown_items():
     from forensics.extraction.schema import parse_tool_input
 

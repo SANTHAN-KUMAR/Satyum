@@ -23,5 +23,14 @@ export default defineConfig(({ mode }) => {
         "/ws": { target: wsTarget, ws: true, changeOrigin: true },
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            vendor: ['react', 'react-dom', 'react-router-dom', 'lucide-react'],
+          },
+        },
+      },
+    },
   };
 });

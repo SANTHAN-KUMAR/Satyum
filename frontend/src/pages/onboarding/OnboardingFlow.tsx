@@ -136,6 +136,7 @@ export function OnboardingFlow() {
       // PAN showed as a financial statement) and mis-routed their forensics. Classification is honest.
       const result = await verifyDocument(file, {
         claimedPan: pan,
+        claimedName: name || undefined,
         password: pdfPassword || undefined,
       });
       setTrust(result);

@@ -87,6 +87,7 @@ async def verify_file(
     doc_type: str | None = Form(default=None),
     issuer_hint: str | None = Form(default=None),
     claimed_pan: str | None = Form(default=None),    # applicant-typed PAN → cross-checked vs the document
+    claimed_name: str | None = Form(default=None),   # applicant-typed name → soft fallback identity check
     features_json: str | None = Form(default=None),  # engineered features for analyst-approved rules
     pdf_password: str | None = Form(default=None),   # unlocks an encrypted (password-protected) PDF
     case_id: str | None = Form(default=None),        # accrue this doc's identity claims into a case
@@ -163,7 +164,13 @@ async def verify_file(
     if pdf_password and pdf_password.strip():
         ctx.pdf_password = pdf_password  # held only for this request; never logged/persisted (§10)
     if claimed_pan and claimed_pan.strip():
-        ctx.claimed_identity = {"pan": claimed_pan.strip().upper()}
+        ctx.claimed_identity["pan"] = claimed_pan.strip().upper()
+    if claimed_name and claimed_name.strip():
+        # Soft fallback identity check (forensics/claimed_identity.py): PAN stays the authoritative,
+        # hard-severity signal when present; name is the only signal left when a document (e.g. a land
+        # deed/encumbrance certificate) carries no PAN at all — without it, a document belonging to a
+        # different person entirely passed through with NO identity signal whatsoever (a real gap).
+        ctx.claimed_identity["name"] = claimed_name.strip()
     if features_json:
         try:
             parsed = json.loads(features_json)
@@ -224,6 +231,7 @@ async def verify_file(
                     entities=entities,
                     verdict=trust.verdict.value,
                     now=_iso_now(),
+                    evidence_pack=trust.model_dump(mode="json"),
                 )
                 bound.info("case.accrual", case_id=case_id)  # no applicant PII (§10)
         except Exception as exc:  # noqa: BLE001 — accrual must never break a verdict
@@ -358,15 +366,26 @@ async def get_session(request: Request, session_id: str) -> dict[str, Any]:
 # memory unboundedly — drop the oldest, never queue without limit.
 _MAX_FRAMES_BUFFERED = 30
 _MIN_FRAMES_TO_SCORE = 4  # matches ActiveChallengeAnalyzer._MIN_FRAMES
-# Auto-score once the buffer holds a full short motion sequence (~5 s at the 300 ms client cadence).
-# The client streams continuously and never has to ask for a score — the server decides when it has
-# captured enough of the commanded motion to verify the active challenge. A client MAY also send
-# ``{"type": "score"}`` to trigger early. DEFAULT — needs calibration against real capture timing.
-_FRAMES_TO_AUTO_SCORE = 16
-# Validity window of the issued challenge nonce, surfaced to the user as a live countdown. This is
-# cosmetic relative to the frame-count trigger above; sized to comfortably cover camera start-up plus
-# the motion window so a cooperating user is never shown "expired" mid-capture.
-_CHALLENGE_TTL_MS = 10_000
+# Auto-score once the buffer holds a full short motion sequence (~7 s at the 300 ms client cadence) —
+# long enough for a cooperating user to read the instruction, get the document in frame, and perform
+# the tilt. The client streams continuously and never has to ask for a score — the server decides when
+# it has captured enough of the commanded motion to verify the active challenge. A client MAY also send
+# ``{"type": "score"}`` to trigger early once they believe they've completed the motion (the "Verify
+# now" control). DEFAULT — needs calibration against real capture timing.
+_FRAMES_TO_AUTO_SCORE = 24
+# Validity window of the issued challenge nonce, surfaced to the user as a live countdown AND actually
+# enforced below as a time-based backstop (previously this was cosmetic only — a documented gap, see
+# architecture/BUILD-MANIFEST.md — the frame-count trigger above fired first regardless of this value).
+# It now also covers the case of slower-than-expected frame delivery: if elapsed time crosses this
+# deadline before the frame count does, we score with whatever motion was captured rather than leaving
+# a cooperating user's session hanging indefinitely.
+_CHALLENGE_TTL_MS = 8_000
+# Bounded in-session retries after a failed/unmet challenge attempt (CLAUDE.md §4 fail-closed still
+# holds: retries are exhausted -> the last scored verdict stands, never silently upgraded). This is a
+# UX/session-cost bound, NOT a security control — a photo-of-screen or pre-recorded clip fails
+# ActiveChallengeAnalyzer's single-homography-consistency check on every independent attempt
+# regardless of how many times it's retried, so bounding this cannot weaken the anti-replay property.
+_MAX_CHALLENGE_RETRIES = 3
 
 # The active-challenge command space the server may randomly issue (anti-replay nonce). Verified by
 # the homography in ActiveChallengeAnalyzer against the tracked corner motion. The COMMANDED
@@ -420,14 +439,16 @@ def _issue_challenge() -> dict[str, Any]:
     }
 
 
-def _challenge_message(challenge: dict[str, Any]) -> dict[str, Any]:
+def _challenge_message(challenge: dict[str, Any], retries_remaining: int) -> dict[str, Any]:
     """Project the authoritative challenge into the client wire message (frontend ServerChallengeMessage).
 
     Carries a human ``kind`` / ``instruction`` plus the exact ``axis`` / ``magnitude_deg`` the
     cooperating client must physically perform. These are not secret from a legitimate client — the
     anti-replay strength is that the command is issued just-in-time and verified against the tracked
     document motion, not that its parameters are hidden. ``challenge_id`` is the nonce; the
-    ``expires_at_ms`` deadline drives the on-screen countdown. Kept field-for-field in lockstep with
+    ``expires_at_ms`` deadline drives the on-screen countdown and is now server-enforced (see
+    ``_CHALLENGE_TTL_MS``). ``retries_remaining`` tells the client how many more in-session attempts
+    are available after this one. Kept field-for-field in lockstep with
     ``frontend/src/api/types.ts :: ServerChallengeMessage`` (CLAUDE.md §11).
     """
     axis = challenge["axis"]
@@ -441,6 +462,7 @@ def _challenge_message(challenge: dict[str, Any]) -> dict[str, Any]:
         "axis": axis,
         "magnitude_deg": round(magnitude, 1),
         "expires_at_ms": int(time.time() * 1000) + _CHALLENGE_TTL_MS,
+        "retries_remaining": retries_remaining,
     }
 
 
@@ -495,22 +517,47 @@ def _decode_base64_frame(b64: str):
     return _decode_jpeg_frame(raw)
 
 
+def _challenge_passed(trust: TrustScore) -> bool:
+    """Did the active-challenge signal come back a clean, low-suspicion pass?
+
+    Mirrors the analyzer's own PASS threshold (``challenge.py::_suspicion`` returns 0.05 on a clean
+    match, >= 0.75 on any failure mode) — a missing/NOT_EVALUATED signal counts as not-passed so a
+    fail-closed default applies when the document couldn't be tracked at all.
+    """
+    for sig in trust.signals:
+        if sig.name == "active_challenge":
+            return sig.suspicion is not None and sig.suspicion <= 0.1
+    return False
+
+
 @router.websocket("/ws/verify")
 async def verify_camera(websocket: WebSocket) -> None:
     """Live camera verification: issue a random 3D challenge, accept streamed frames, score, return.
 
     Protocol — kept field-for-field in lockstep with ``frontend/src/api/types.ts`` (CLAUDE.md §11):
-      * server → client on connect: ``{"type": "challenge", challenge_id, kind, instruction, axis,
-        magnitude_deg, expires_at_ms}``
-      * client → server: ``{"type": "hello", doc_type}`` then ``{"type": "frame", jpeg_base64, ...}``
-        per ~300 ms window (JSON; ``jpeg_base64`` carries no data-URL prefix). Raw binary frames are
-        also accepted as a fallback.
+      * server → client on connect (and after each granted retry): ``{"type": "challenge",
+        challenge_id, kind, instruction, axis, magnitude_deg, expires_at_ms, retries_remaining}``.
+        ``expires_at_ms`` here is indicative only — the real TTL clock does not start until the
+        client arms the attempt (below), so a user reading the instruction is never racing a
+        deadline that started before they could act on it.
+      * client → server: ``{"type": "hello", doc_type}``, then ``{"type": "start_attempt"}`` once
+        the user is ready to begin (this is what actually starts the TTL clock and unblocks frame
+        buffering — server replies ``{"type": "armed", "expires_at_ms": ...}`` with the real
+        deadline), then ``{"type": "frame", jpeg_base64, ...}`` per ~300 ms window (JSON;
+        ``jpeg_base64`` carries no data-URL prefix; raw binary frames are also accepted). A client
+        MAY send ``{"type": "score"}`` to score early, or ``{"type": "retry"}`` after a failed
+        attempt to request a fresh challenge on the same connection (bounded by
+        ``_MAX_CHALLENGE_RETRIES`` — fail-closed once exhausted; a retried attempt again needs its
+        own ``start_attempt`` before it's armed).
       * server → client: ``{"type": "tier_status", signals: [...]}`` per accepted frame (honest
         capture progress), then ``{"type": "result", trust_score: {...}}`` once enough of the
-        commanded motion is captured (or on a client ``{"type": "score"}``).
+        commanded motion is captured, the TTL backstop elapses, or a client-requested early score.
+        If the attempt failed AND a retry is still available, the connection stays open awaiting
+        ``{"type": "retry"}`` instead of closing — the final ``result`` is the LAST attempt scored.
       * server → client on failure: ``{"type": "error", message}``.
 
-    Frames are dropped from the session the instant scoring completes (§10).
+    Frames received before arming, or after a failed attempt awaiting retry, are ignored and never
+    buffered. Frames are dropped from the session the instant each attempt is scored (§10).
     """
     app = websocket.app
     session = app.state.sessions
@@ -522,13 +569,21 @@ async def verify_camera(websocket: WebSocket) -> None:
     ctx: AnalysisContext = session.create(intake_mode=Mode.CAMERA, doc_type="live_capture")
     challenge = _issue_challenge()
     ctx.shared["challenge"] = challenge
+    challenge_issued_at = time.monotonic()
 
     bound = log.bind(session_id=ctx.session_id, intake_mode="CAMERA")
     bound.info("verify.ws.connected", challenge_axis=challenge["axis"], nonce=challenge["nonce"])
 
-    await websocket.send_json(_challenge_message(challenge))
+    await websocket.send_json(_challenge_message(challenge, retries_remaining=_MAX_CHALLENGE_RETRIES))
 
     scored = False
+    retry_count = 0
+    awaiting_retry = False  # True once an attempt has failed and a retry is still on offer
+    # The TTL clock does NOT start at challenge issue — a user reading the instruction and getting the
+    # document into frame shouldn't be racing an invisible-until-too-late deadline. It starts only once
+    # the client explicitly signals readiness (``{"type": "start_attempt"}``, the "Start attempt"
+    # control). Frames received before arming are ignored, never buffered toward a verdict.
+    armed = False
     try:
         while True:
             message = await websocket.receive()
@@ -549,10 +604,48 @@ async def verify_camera(websocket: WebSocket) -> None:
                 mtype = payload.get("type")
                 if mtype == "hello":
                     continue  # the session was created on accept; nothing else to do
+                if mtype == "retry":
+                    if not awaiting_retry:
+                        continue  # nothing to retry (never scored yet, or already passed)
+                    if retry_count >= _MAX_CHALLENGE_RETRIES:
+                        await websocket.send_json(
+                            {"type": "error", "message": "no retries remaining"}
+                        )
+                        scored = True
+                        break
+                    retry_count += 1
+                    awaiting_retry = False
+                    armed = False  # the new attempt again waits for an explicit "start_attempt"
+                    challenge = _issue_challenge()  # fresh axis/magnitude/nonce — never reused
+                    ctx.shared["challenge"] = challenge
+                    bound.info(
+                        "verify.ws.retry", retry_count=retry_count, challenge_axis=challenge["axis"]
+                    )
+                    await websocket.send_json(
+                        _challenge_message(
+                            challenge, retries_remaining=_MAX_CHALLENGE_RETRIES - retry_count
+                        )
+                    )
+                    continue
+                if mtype == "start_attempt":
+                    if armed or awaiting_retry:
+                        continue  # already armed, or this attempt already failed — nothing to do
+                    armed = True
+                    challenge_issued_at = time.monotonic()  # the TTL clock starts NOW, not at issue
+                    expires_at_ms = int(time.time() * 1000) + _CHALLENGE_TTL_MS
+                    await websocket.send_json({"type": "armed", "expires_at_ms": expires_at_ms})
+                    continue
                 if mtype == "score":
-                    await _score_camera(websocket, session, registry, ledger, ctx, bound)
+                    if not armed or awaiting_retry:
+                        continue  # nothing buffered yet, or this attempt already failed
+                    trust = await _score_camera(websocket, session, registry, ledger, ctx, bound)
+                    if trust is None:
+                        continue
                     scored = True
-                    break
+                    if _challenge_passed(trust):
+                        break
+                    awaiting_retry = True
+                    continue
                 if mtype == "frame":
                     frame = _decode_base64_frame(payload.get("jpeg_base64") or "")
                 else:
@@ -562,6 +655,9 @@ async def verify_camera(websocket: WebSocket) -> None:
             else:
                 continue
 
+            if not armed or awaiting_retry:
+                continue  # not yet armed, or this attempt already failed — ignore, never buffer
+
             if frame is None:
                 continue  # undecodable frame — skip silently, never count it toward the challenge
 
@@ -570,11 +666,22 @@ async def verify_camera(websocket: WebSocket) -> None:
                 ctx.frames.pop(0)
             session.add_frame(ctx.session_id, frame)
 
-            # Enough of the commanded motion captured -> verify now and return the verdict.
-            if len(ctx.frames) >= _FRAMES_TO_AUTO_SCORE:
-                await _score_camera(websocket, session, registry, ledger, ctx, bound)
+            elapsed_ms = (time.monotonic() - challenge_issued_at) * 1000
+            # Score once enough of the commanded motion is captured, OR the TTL backstop elapses
+            # (previously only the frame count mattered and the TTL was purely cosmetic — a
+            # cooperating user on a slow connection could be scored on too little motion, or a
+            # non-cooperating one force-rejected before the honest deadline actually passed).
+            enough_frames = len(ctx.frames) >= _FRAMES_TO_AUTO_SCORE
+            ttl_elapsed = elapsed_ms >= _CHALLENGE_TTL_MS and len(ctx.frames) >= _MIN_FRAMES_TO_SCORE
+            if enough_frames or ttl_elapsed:
+                trust = await _score_camera(websocket, session, registry, ledger, ctx, bound)
+                if trust is None:
+                    continue
                 scored = True
-                break
+                if _challenge_passed(trust):
+                    break
+                awaiting_retry = True
+                continue
 
             await websocket.send_json(_live_status_message(len(ctx.frames)))
 
@@ -601,14 +708,14 @@ async def _score_camera(
     ledger,
     ctx: AnalysisContext,
     bound,
-) -> None:
-    """Run camera-mode verification on the buffered frames and stream back the result."""
+) -> TrustScore | None:
+    """Run camera-mode verification on the buffered frames, stream back the result, and return it."""
     if len(ctx.frames) < _MIN_FRAMES_TO_SCORE:
         await websocket.send_json(
             {"type": "error",
              "message": f"need >= {_MIN_FRAMES_TO_SCORE} frames to score (have {len(ctx.frames)})"}
         )
-        return
+        return None
 
     try:
         trust: TrustScore = await run_in_threadpool(
@@ -628,3 +735,4 @@ async def _score_camera(
     await websocket.send_json(
         {"type": "result", "trust_score": trust.model_dump(mode="json")}
     )
+    return trust

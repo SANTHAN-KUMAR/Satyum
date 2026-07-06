@@ -32,6 +32,14 @@ class Break:
     printed: Decimal | None = None
     index: int | None = None  # row index of a localized break (e.g. the transaction whose balance broke)
     detail: str = ""
+    # Rows since the last TRUSTED comparison that were silently carried forward uncompared (their
+    # credit/debit/balance failed the cross-read gate — e.g. the VLM did not box-ground them). 0 means
+    # the immediately preceding row was itself confirmed, so this break sits on solid ground: a genuine
+    # single-cell edit. >0 means the "expected" side accumulated real, unverifiable movement across a
+    # run of untrusted rows before this comparison — the mismatch may be an extraction grounding gap,
+    # not tampering (rules/checks.py::linear_balance; CLAUDE.md §3.3 — never fabricate certainty the
+    # data doesn't support).
+    unconfirmed_run: int = 0
 
     @property
     def delta(self) -> Decimal | None:

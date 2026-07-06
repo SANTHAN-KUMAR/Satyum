@@ -18,6 +18,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.case_store import CaseStore
 from app.config import settings
 from app.registry_assembly import build_registry
 from app.routes.cases import router as cases_router
@@ -27,7 +28,7 @@ from app.routes.ring import router as ring_router
 from app.routes.rules import router as rules_router
 from app.routes.sources import router as sources_router
 from app.routes.verify import router as verify_router
-from app.case_store import CaseStore
+from app.routes.vlm_cache import router as vlm_cache_router
 from app.session import SessionManager
 from federation.graph import EntityGraph
 from federation.registry import FraudRegistry
@@ -112,6 +113,7 @@ def create_app() -> FastAPI:
     app.include_router(registry_router)    # cross-bank fraud-hash registry (consortium)
     app.include_router(ring_router)        # cross-bank entity-graph ring evidence
     app.include_router(rules_router)       # FL-discovered rule mining + analyst promotion
+    app.include_router(vlm_cache_router)   # Layer-2 replay cache: save/replay real VLM reads
 
     @app.get("/api/health")
     async def health() -> dict[str, object]:

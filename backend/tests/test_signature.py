@@ -241,6 +241,24 @@ def pdf_signed_attacker(attacker_ca) -> bytes:
 
 
 @pytest.fixture(scope="module")
+def pdf_signed_unrecognized_subfilter(pdf_signed_trusted) -> bytes:
+    """A genuinely, validly-signed PDF whose ``/SubFilter`` name is rewritten from the CMS-detached
+    value pyHanko recognizes to a same-length placeholder pyHanko's ``_validate_subfilter`` does NOT
+    recognize — reproducing the real-world ``/adbe.pkcs7.sha1`` variant seen on some Indian government
+    e-registration PDFs (e.g. the reported kerala_EC.pdf). The byte-for-byte substring swap keeps every
+    other byte, offset and the ``/ByteRange`` untouched, so this exercises exactly pyHanko raising
+    ``SignatureValidationError('... is not a recognized SubFilter type ...')`` on an otherwise-real
+    signature — the exact regression this fixture must catch if the unsupported-subfilter handling in
+    ``PadesSignatureAnalyzer._analyze`` is ever removed or narrowed to a specific format string.
+    """
+    original = b"/adbe.pkcs7.detached"
+    replacement = b"/adbe.pkcs7.sha1" + b" " * (len(original) - len(b"/adbe.pkcs7.sha1"))
+    assert len(original) == len(replacement)
+    assert original in pdf_signed_trusted, "fixture assumption: pyHanko's default CMS subfilter name"
+    return pdf_signed_trusted.replace(original, replacement)
+
+
+@pytest.fixture(scope="module")
 def pdf_appended_after_signature(pdf_signed_trusted) -> bytes:
     """A validly-signed PDF with a REAL incremental-update revision appended after the signature
     (the shadow / incremental-update attack).
@@ -351,6 +369,28 @@ def test_d_unsigned_pdf_is_absent_not_evaluated(anchor_dir):
     assert sig.suspicion is None  # never a fabricated pass
     assert sig.measurements.get("provenance") == PROV_ABSENT
     assert ctx.shared.get("provenance_verified") is not True
+
+
+# --------------------------------------------------------------------------------------------------
+# An unrecognized (but genuinely present, not corrupt) /SubFilter -> NOT_EVALUATED, never TAMPERED.
+#
+# MUST-FAIL FIXTURE: before the unsupported-subfilter handling in PadesSignatureAnalyzer._analyze,
+# pyHanko's SignatureValidationError on this subfilter propagated all the way to the generic
+# `except Exception` at the top of `_analyze` (or crashed the analyzer to ERROR), which — for the real
+# reported document (kerala_EC.pdf, /adbe.pkcs7.sha1) — a caller one layer up (providers/digilocker.py)
+# could misreport as an invalid/tampered signature. A genuinely-signed, byte-for-byte-otherwise-valid
+# document must never be accused of tampering just because pyHanko's CMS-only validator doesn't
+# recognize this particular subfilter string.
+# --------------------------------------------------------------------------------------------------
+
+
+def test_unrecognized_subfilter_is_not_evaluated_not_tampered(anchor_dir, pdf_signed_unrecognized_subfilter):
+    az = PadesSignatureAnalyzer(anchor_dir=anchor_dir)
+    sig = az.analyze(_ctx(pdf_signed_unrecognized_subfilter))
+    assert sig.status == SignalStatus.NOT_EVALUATED
+    assert sig.suspicion is None  # never a fabricated tamper verdict for a format gap
+    assert sig.measurements.get("provenance") != PROV_TAMPERED
+    assert "unsupported format" in sig.reason.lower()
 
 
 # --------------------------------------------------------------------------------------------------

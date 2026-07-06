@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import typography from "@tailwindcss/typography";
 
 /**
  * Satyum design tokens — monochrome-first (white major, near-black ink), the StartGlobal-style premium
@@ -88,14 +89,62 @@ const config: Config = {
           "0%, 100%": { transform: "translateY(0)" },
           "50%": { transform: "translateY(-8px)" },
         },
+        "pulse-ring": {
+          "0%, 100%": { opacity: "1", transform: "scale(1)" },
+          "50%": { opacity: "0.55", transform: "scale(1.12)" },
+        },
+        // Directional nudges for the live-capture challenge overlay (ChallengeOverlay.tsx): the icon
+        // physically moves the way the server is asking the user to tilt the document, instead of
+        // just pulsing in place — a plain-language substitute for "tilt 22 degrees" (CLAUDE.md §9).
+        "nudge-up": {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-7px)" },
+        },
+        "nudge-down": {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(7px)" },
+        },
+        "nudge-left": {
+          "0%, 100%": { transform: "translateX(0)" },
+          "50%": { transform: "translateX(-7px)" },
+        },
+        "nudge-right": {
+          "0%, 100%": { transform: "translateX(0)" },
+          "50%": { transform: "translateX(7px)" },
+        },
+        "nudge-rotate-cw": {
+          "0%, 100%": { transform: "rotate(0deg)" },
+          "50%": { transform: "rotate(18deg)" },
+        },
+        "nudge-rotate-ccw": {
+          "0%, 100%": { transform: "rotate(0deg)" },
+          "50%": { transform: "rotate(-18deg)" },
+        },
+        "nudge-zoom-in": {
+          "0%, 100%": { transform: "scale(1)" },
+          "50%": { transform: "scale(1.25)" },
+        },
+        "nudge-zoom-out": {
+          "0%, 100%": { transform: "scale(1)" },
+          "50%": { transform: "scale(0.8)" },
+        },
       },
       animation: {
         "fade-in": "fade-in 0.4s ease-out both",
         float: "float 8s ease-in-out infinite",
+        "pulse-ring": "pulse-ring 1.4s ease-in-out infinite",
+        "nudge-up": "nudge-up 1.1s ease-in-out infinite",
+        "nudge-down": "nudge-down 1.1s ease-in-out infinite",
+        "nudge-left": "nudge-left 1.1s ease-in-out infinite",
+        "nudge-right": "nudge-right 1.1s ease-in-out infinite",
+        "nudge-rotate-cw": "nudge-rotate-cw 1.1s ease-in-out infinite",
+        "nudge-rotate-ccw": "nudge-rotate-ccw 1.1s ease-in-out infinite",
+        "nudge-zoom-in": "nudge-zoom-in 1.1s ease-in-out infinite",
+        "nudge-zoom-out": "nudge-zoom-out 1.1s ease-in-out infinite",
       },
     },
   },
-  plugins: [],
+  plugins: [typography],
 };
 
 export default config;

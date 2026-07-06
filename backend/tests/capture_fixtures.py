@@ -123,10 +123,15 @@ def looped_frames(n: int = 64, count: int = 12, loop: int = 3) -> list[np.ndarra
     return [_gray_to_bgr(clip[i % loop].copy()) for i in range(count)]
 
 
-def _textured_document(n: int) -> np.ndarray:
-    """A trackable textured document filling the centre of an n x n grayscale frame."""
+def _textured_document(n: int, margin_frac: float = 0.25) -> np.ndarray:
+    """A trackable textured document filling the centre of an n x n grayscale frame.
+
+    ``margin_frac`` controls how much of the frame the document occupies (default 25% margin ->
+    document covers 50% of each dimension, 25% of area); a larger fraction shrinks the document,
+    e.g. for the small-document-in-a-big-frame regression fixture.
+    """
     img = np.full((n, n), 30, np.uint8)
-    margin = n // 4
+    margin = int(n * margin_frac)
     cv2.rectangle(img, (margin, margin), (n - margin, n - margin), 220, -1)
     rng = np.random.default_rng(99)
     for _ in range(80):
@@ -153,6 +158,50 @@ def static_challenge_sequence(n: int = 300, steps: int = 8) -> list[np.ndarray]:
     doc = _textured_document(n)
     frame = cv2.cvtColor(doc, cv2.COLOR_GRAY2BGR)
     return [frame.copy() for _ in range(steps)]
+
+
+def small_document_over_busy_static_background(
+    axis: str, max_deg: float, n: int = 300, steps: int = 8, margin_frac: float = 0.38
+) -> list[np.ndarray]:
+    """The document tilts correctly, but sits inside a cluttered, perfectly STATIC background
+    (many more corner candidates than the document itself) — approximates a small ID card held up
+    in front of a real, busy, mostly-still room (a panelled door, a hinge, a face). Regression
+    fixture for the corner-seeding fix in ``capture/challenge.py::track_corners``: unmasked
+    ``goodFeaturesToTrack`` would seed mostly on the static background, corrupting the single-
+    homography fit with a mix of two different motions even though the document itself moved
+    exactly as commanded.
+
+    The document is warped by the SAME per-sequence homography (``tilt_homography(n, ...)``, full
+    frame size) used by ``challenge_sequence`` — critically at the SAME ``n``, so the recovered
+    angle decomposition (which assumes intrinsics derived from the actual frame size) stays valid.
+    Only the warped document's own (non-background-fill) pixels are composited onto the static
+    clutter each frame, so the clutter never moves while the small document tilts realistically.
+    """
+    doc = _textured_document(n, margin_frac=margin_frac)
+    margin = int(n * margin_frac)
+
+    rng = np.random.default_rng(11)
+    background = np.full((n, n), 70, np.uint8)
+    pad = 20  # keep a clean buffer (> max shape radius) around the document's own border so
+    # background clutter never fuses into its contour (Canny + dilation would otherwise merge an
+    # adjacent shape into a non-convex blob, defeating quad detection entirely rather than testing
+    # the fix). Circles only (bounded radius) — a line's far endpoint is harder to keep clear.
+    for _ in range(80):
+        x, y = int(rng.integers(0, n)), int(rng.integers(0, n))
+        if margin - pad <= x <= n - margin + pad and margin - pad <= y <= n - margin + pad:
+            continue
+        cv2.circle(background, (x, y), int(rng.integers(3, 8)), int(rng.integers(0, 255)), -1)
+
+    frames = []
+    for i in range(steps):
+        deg = max_deg * i / (steps - 1)
+        homog = tilt_homography(n, axis, deg)
+        warped_doc = cv2.warpPerspective(doc, homog, (n, n), borderValue=30)
+        frame = background.copy()
+        doc_pixels = np.abs(warped_doc.astype(np.int16) - 30) > 3  # anything but the border fill
+        frame[doc_pixels] = warped_doc[doc_pixels]
+        frames.append(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))
+    return frames
 
 
 def double_perspective_sequence(n: int = 300, steps: int = 8) -> list[np.ndarray]:

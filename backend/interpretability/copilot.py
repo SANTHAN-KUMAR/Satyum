@@ -10,22 +10,41 @@ from .tools import COPILOT_TOOLS, execute_tool
 logger = logging.getLogger(__name__)
 
 async def ask_copilot(
-    question: str, 
-    evidence_pack: dict[str, Any], 
+    question: str,
+    case_documents: dict[str, dict[str, Any]],
     chat_history: list[CopilotMessage] | None = None
 ) -> CopilotResponse:
-    """Handles an interactive Q&A turn with the copilot, executing any required tools."""
+    """Handles an interactive Q&A turn with the copilot, executing any required tools.
+
+    ``case_documents`` maps a human-readable label (a filename, or a doc type like "bank_statement")
+    to that document's full evidence pack. A single-document Console session passes a one-entry map;
+    the case-accumulation page passes every document verified so far in that case — so the SAME copilot
+    can answer "what was on the bank statement" while the underwriter is looking at the PAN, without
+    forgetting anything as documents are added (CLAUDE.md §4 — one stable contract, not a special case
+    per page).
+    """
     history = chat_history or []
-    
-    # We initialize the system context. We don't inject the full evidence pack into the context window
-    # directly for the copilot; instead, we let it use tools to fetch what it needs, ensuring a true MCP flow.
-    # However, to give it initial context, we provide the overall verdict.
-    
-    session_id = evidence_pack.get("session_id", "Unknown")
-    verdict = evidence_pack.get("verdict", "Unknown")
-    
-    initial_context = f"Current Session ID: {session_id}\nOverall Verdict: {verdict}\n"
-    
+
+    # We initialize the system context. We don't inject the full evidence pack(s) into the context
+    # window directly; instead we let the model use tools to fetch what it needs, ensuring a true MCP
+    # flow. We do give it an upfront map of what's in scope so it knows whether to specify a document.
+    if len(case_documents) == 1:
+        ((_, only_pack),) = case_documents.items()
+        initial_context = (
+            f"Current Session ID: {only_pack.get('session_id', 'Unknown')}\n"
+            f"Overall Verdict: {only_pack.get('verdict', 'Unknown')}\n"
+        )
+    else:
+        lines = "\n".join(
+            f"- {label}: verdict={pack.get('verdict')}, trust_score={pack.get('trust_score')}"
+            for label, pack in case_documents.items()
+        )
+        initial_context = (
+            f"This case has {len(case_documents)} documents in scope:\n{lines}\n"
+            "Every tool takes an optional 'document' argument naming which one to read — use it "
+            "whenever the question is about a specific document; call list_case_documents if unsure.\n"
+        )
+
     messages = [
         {"role": "system", "content": COPILOT_SYSTEM_PROMPT + "\n\n" + initial_context}
     ]
@@ -53,8 +72,8 @@ async def ask_copilot(
                 logger.info(f"Copilot invoked tool: {function_name}")
                 tool_calls_made.append({"tool": function_name, "arguments": arguments})
                 
-                # Execute tool against the frozen evidence pack
-                tool_result = execute_tool(function_name, arguments, evidence_pack)
+                # Execute tool against the frozen, per-document evidence packs in scope
+                tool_result = execute_tool(function_name, arguments, case_documents)
                 
                 # Append tool response
                 messages.append({

@@ -48,7 +48,7 @@ interface EvidenceConsoleProps {
 export function EvidenceConsole({ trust, previewUrl, isPdf, fileName }: EvidenceConsoleProps) {
   const pack = trust.evidence_pack;
   const tierLabel = TIER_LABEL[trust.tier_reached] ?? trust.tier_reached;
-  const { setCopilotContext } = useCopilotContext();
+  const { setDocumentContext } = useCopilotContext();
 
   const hasSufficiency = trust.evidence_sufficiency != null;
   const hasPipeline = (trust.pipeline_layers?.length ?? 0) > 0;
@@ -56,12 +56,12 @@ export function EvidenceConsole({ trust, previewUrl, isPdf, fileName }: Evidence
   const hasRulePacks = (trust.rule_pack_results?.length ?? 0) > 0;
   const hasAnomaly = (trust.anomaly_signals?.length ?? 0) > 0;
 
-  // Register this evidence pack as the global Copilot's active context. Deliberately NOT cleared on
-  // unmount — navigating away (e.g. to Consortium) should keep the last real analysis available in the
-  // drawer, not blank it out, so the "omnipresent" copilot survives route changes.
+  // Register this evidence pack as the global Copilot's active (single-document) context. Deliberately
+  // NOT cleared on unmount — navigating away (e.g. to Consortium) should keep the last real analysis
+  // available in the drawer, not blank it out, so the "omnipresent" copilot survives route changes.
   useEffect(() => {
-    setCopilotContext(pack, fileName);
-  }, [pack, fileName, setCopilotContext]);
+    setDocumentContext(pack, fileName);
+  }, [pack, fileName, setDocumentContext]);
 
   const tabs = useMemo<EvidenceTabDef[]>(
     () => [

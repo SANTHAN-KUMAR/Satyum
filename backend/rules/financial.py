@@ -16,16 +16,17 @@ localizes the exact cell; a number the readers couldn't agree on yields NOT_EVAL
 
 from __future__ import annotations
 
+import statistics
 from datetime import date
 from decimal import Decimal
 
 from app.claims import Claim, ClaimGraph
 from rules.checks import comparison, equation, linear_balance, sequence_monotonic, sum_equals
-from rules.contracts import RuleEvidence, RuleResult
+from rules.contracts import Break, RuleEvidence, RuleResult, RuleStatus
 from rules.dates import parse_date
 from rules.packbase import cell as _cell
 from rules.packbase import ev as _ev
-from rules.packbase import failed, not_evaluated, passed, scalar
+from rules.packbase import failed, meta, not_evaluated, passed, scalar
 
 DOMAIN = "financial"
 
@@ -45,6 +46,13 @@ def _not_evaluated(rule_id: str) -> RuleResult:
     return not_evaluated(DOMAIN, rule_id)
 
 
+def _not_evaluated_because(rule_id: str, reason: str) -> RuleResult:
+    """NOT_EVALUATED with a reason specific to this run (e.g. naming the exact unconfirmed row/gap),
+    rather than the rulebook's static insufficiency message."""
+    m = meta(DOMAIN, rule_id)
+    return RuleResult(rule_id, m["name"], RuleStatus.NOT_EVALUATED, None, reason)
+
+
 def _passed(rule_id: str) -> RuleResult:
     return passed(DOMAIN, rule_id)
 
@@ -60,6 +68,140 @@ def _transactions(graph: ClaimGraph) -> list[tuple[int, dict[str, Claim]]]:
         if c.subject.startswith("transaction_") and c.index is not None:
             rows.setdefault(c.index, {})[c.predicate] = c
     return [(seq, rows[seq]) for seq in sorted(rows)]
+
+
+def _uncounted_movement(txns: list[tuple[int, dict[str, Claim]]], gate: float) -> int:
+    """How many transaction rows have a credit/debit that was extracted but failed the trust gate.
+
+    ``_cell()`` returns ``None`` for both "this row has no such column" (a debit-only row has no
+    credit) and "the claim exists but the cross-read never confirmed it" — a sum over ``_cell()``
+    results cannot tell those apart, so it would silently exclude a REAL, unverifiable amount rather
+    than the correct nothing. F3/F4 sum every row's movement; excluding an unconfirmed amount changes
+    the sum's *meaning*, not just its precision, so a summed invariant must refuse to score across such
+    a gap rather than confidently report a mismatch it cannot actually attribute to tampering (§3.3).
+    """
+    count = 0
+    for _seq, cells in txns:
+        for predicate in ("credit", "debit"):
+            claim = cells.get(predicate)
+            if claim is not None and not claim.is_trusted(gate):
+                count += 1
+    return count
+
+
+# Minimum rows-per-column needed before a document's own layout can be trusted as a geometric baseline
+# (fewer than this and a couple of genuinely narrow/wide cells could look like a whole misplaced column
+# — insufficient evidence either way, so the check abstains rather than guess). Structural, not a
+# calibrated statistic — small enough to fire on a typical multi-page statement, large enough that a
+# median is not just 1-2 points.
+_MIN_ROWS_PER_COLUMN_FOR_BASELINE = 3
+
+
+def _bbox_x_center(bbox: tuple[float, float, float, float] | None) -> float | None:
+    if bbox is None:
+        return None
+    x, _y, w, _h = bbox
+    return x + w / 2
+
+
+def _column_mislabeled_rows(txns: list[tuple[int, dict[str, Claim]]], gate: float) -> frozenset[int]:
+    """Rows whose debit/credit PREDICATE looks geometrically inconsistent with the rest of THIS
+    document's own table layout — a template-independent, per-document check, not a hardcoded column
+    position or bank-specific rule (CLAUDE.md §6 — no invented pseudo-science, no magic numbers).
+
+    A reader can misread which COLUMN a genuinely-printed number belongs to (observed: a savings-
+    interest credit read into the debit slot) — the cross-read confirms the NUMBER at a cell, never
+    which semantic column the reader assigned it to (§5.2's box-grounding covers values, not labels).
+    This recovers a REAL, deterministic signal for that specific gap: every bank statement lays credit
+    and debit amounts out in their own vertical band, so the median x-position of every trusted "credit"
+    cell and every trusted "debit" cell — computed FRESH from this document's own rows, no other input —
+    is that document's own column geometry. A row whose claimed column sits closer to the OTHER
+    column's median than its own is flagged: not proof of a wrong figure, only proof the LABEL is
+    questionable, so a rule using this must not treat it as confirmed tamper evidence.
+
+    Abstains (returns empty) whenever the geometry itself is inconclusive: too few rows to trust a
+    median, or the two columns' medians are not clearly separated (e.g. a layout with no distinct
+    debit/credit columns at all) — never invents a column boundary that isn't really there.
+    """
+    xs: dict[str, list[float]] = {"debit": [], "credit": []}
+    cells_by_predicate: dict[str, list[tuple[int, float]]] = {"debit": [], "credit": []}
+    for seq, cells in txns:
+        for predicate in ("debit", "credit"):
+            claim = cells.get(predicate)
+            if claim is None or not claim.is_trusted(gate):
+                continue
+            x = _bbox_x_center(claim.provenance.bbox if claim.provenance else None)
+            if x is None:
+                continue
+            xs[predicate].append(x)
+            cells_by_predicate[predicate].append((seq, x))
+
+    if len(xs["debit"]) < _MIN_ROWS_PER_COLUMN_FOR_BASELINE:
+        return frozenset()
+    if len(xs["credit"]) < _MIN_ROWS_PER_COLUMN_FOR_BASELINE:
+        return frozenset()
+
+    debit_median = statistics.median(xs["debit"])
+    credit_median = statistics.median(xs["credit"])
+    column_gap = abs(credit_median - debit_median)
+    # The two columns must be clearly separated relative to their own spread, else this document's
+    # layout doesn't support a confident column-boundary inference (abstain rather than guess).
+    spread = statistics.median(
+        [abs(x - debit_median) for x in xs["debit"]] + [abs(x - credit_median) for x in xs["credit"]]
+    )
+    if column_gap <= max(spread * 2, 1e-6):
+        return frozenset()
+
+    outliers: set[int] = set()
+    for predicate, own_median, other_median in (
+        ("debit", debit_median, credit_median),
+        ("credit", credit_median, debit_median),
+    ):
+        for seq, x in cells_by_predicate[predicate]:
+            if abs(x - other_median) < abs(x - own_median):
+                outliers.add(seq)
+    return frozenset(outliers)
+
+
+def _bbox_free_swap_rows(
+    txns: list[tuple[int, dict[str, Claim]]],
+    rows: list[tuple[int, Decimal | None, Decimal | None, Decimal | None]],
+    breaks: tuple[Break, ...],
+    tol: Decimal,
+) -> frozenset[int]:
+    """Confirmed breaks that reconcile exactly if THIS row's own credit and debit are swapped —
+    restricted to rows whose credit/debit claim carries NO bbox at all (observed in production: a
+    reader can ground page 1 with real boxes and then return a null bbox for every cell on a
+    continuation page — a real reader inconsistency, not a code bug). `_column_mislabeled_rows` has no
+    evidence on those rows and abstains; this closes exactly that blind spot with a self-contained
+    re-check of the SAME linear-balance equation, needing no geometry at all.
+
+    Deliberately does NOT apply when a bbox IS present. Adding exactly twice a row's own movement to a
+    printed balance is arithmetically indistinguishable from a column swap — so where geometry already
+    places the figure in its OWN column (positive evidence against a swap), that coincidence must be
+    attributed to a real edit, never relabelled ambiguous (`test_genuine_edit_in_a_correctly_labeled_
+    column_still_fails` guards this).
+    """
+    cells_by_index = {seq: cells for seq, cells in txns}
+    by_index = {seq: (credit, debit) for seq, credit, debit, _ in rows}
+    swapped: set[int] = set()
+    for b in breaks:
+        if b.index is None or b.expected is None or b.printed is None:
+            continue
+        cells = cells_by_index.get(b.index, {})
+        has_bbox = any(
+            claim is not None and claim.provenance is not None and claim.provenance.bbox is not None
+            for claim in (cells.get("credit"), cells.get("debit"))
+        )
+        if has_bbox:
+            continue
+        credit, debit = by_index.get(b.index, (None, None))
+        if credit is None and debit is None:
+            continue
+        swapped_expected = b.expected - 2 * ((credit or Decimal(0)) - (debit or Decimal(0)))
+        if (swapped_expected - b.printed).copy_abs() <= tol:
+            swapped.add(b.index)
+    return frozenset(swapped)
 
 
 # --- the rules ------------------------------------------------------------------------------------
@@ -87,10 +229,61 @@ def f1_running_balance(graph: ClaimGraph, gate: float, tol: Decimal) -> RuleResu
         return _not_evaluated("F1")
     if outcome.passed:
         return _passed("F1")
+
+    # A break right after a CONFIRMED row (unconfirmed_run == 0) is unambiguous: a printed figure that
+    # matched expectations one row ago now doesn't — a genuine single-cell edit. A break preceded by a
+    # run of uncompared rows (their cross-read never confirmed them — e.g. an ungrounded VLM box on an
+    # entire page) only proves that stretch is unverifiable, not that any cell in it was edited;
+    # reporting it as a FAIL would be exactly the fabricated certainty CLAUDE.md §3.3 forbids.
+    confirmed = [b for b in outcome.breaks if b.unconfirmed_run == 0]
+    weak = [b for b in outcome.breaks if b.unconfirmed_run > 0]
+    if not confirmed:
+        worst = max(weak, key=lambda b: b.unconfirmed_run)
+        return _not_evaluated_because(
+            "F1",
+            f"{worst.unconfirmed_run} row(s) before row {worst.index} could not be independently "
+            f"confirmed (ungrounded/unread) — the running-balance chain cannot be verified across "
+            f"that gap, so a mismatch there is not attributed to tampering",
+        )
+
+    # A confirmed break can still have an innocent cause distinct from an edited figure: the reader put
+    # a genuinely-printed amount in the wrong column (debit vs credit) — the cross-read confirms the
+    # NUMBER at a cell, never which column it was labelled under (§5.2 covers values, not labels). Two
+    # independent, template-independent checks recover this without ever asserting a verdict the data
+    # doesn't support: `_column_mislabeled_rows` uses this document's own column geometry; `
+    # _bbox_free_swap_rows` catches the same failure on rows geometry has no opinion on at all (a reader
+    # that dropped box-grounding for a whole page — CLAUDE.md §6, observed in production). Either is
+    # real evidence of *something questionable*, but not proof the figure itself was edited — reporting
+    # it as confirmed tamper would overstate what was actually established.
+    geometric_rows = _column_mislabeled_rows(txns, gate)
+    swap_rows = _bbox_free_swap_rows(txns, rows, tuple(confirmed), tol)
+    mislabeled_rows = geometric_rows | swap_rows
+    clean = [b for b in confirmed if b.index not in mislabeled_rows]
+    ambiguous = [b for b in confirmed if b.index in mislabeled_rows]
+    if not clean:
+        worst = ambiguous[0]
+        if worst.index in geometric_rows:
+            cause = (
+                f"row {worst.index}'s debit/credit column assignment is geometrically inconsistent "
+                f"with the rest of this statement's own layout"
+            )
+        else:
+            cause = (
+                f"row {worst.index}'s own printed figure exactly reconciles the chain if its debit and "
+                f"credit were swapped, and its box grounding is missing so geometry cannot corroborate "
+                f"either reading"
+            )
+        return _not_evaluated_because(
+            "F1",
+            f"{cause} (expected {worst.expected}, printed {worst.printed}) — the figure may be "
+            f"correctly read but mislabeled debit/credit, not necessarily edited; not attributed to "
+            f"tampering",
+        )
+
     evidence = tuple(
-        _ev("transaction", "running_balance", bal_claims.get(b.index), b) for b in outcome.breaks
+        _ev("transaction", "running_balance", bal_claims.get(b.index), b) for b in clean
     )
-    first = outcome.breaks[0]
+    first = clean[0]
     reason = (
         f"running balance does not carry forward at row {first.index}: "
         f"expected {first.expected}, printed {first.printed}"
@@ -133,6 +326,15 @@ def f3_column_totals(graph: ClaimGraph, gate: float, tol: Decimal) -> RuleResult
     if stated_debits is None and stated_credits is None:
         return _not_evaluated("F3")
 
+    uncounted = _uncounted_movement(txns, gate)
+    if uncounted:
+        return _not_evaluated_because(
+            "F3",
+            f"{uncounted} transaction amount(s) could not be independently confirmed — summing only "
+            f"the confirmed rows would silently exclude real (unconfirmed) movement, so the column "
+            f"total cannot be reliably checked",
+        )
+
     evidence: list[RuleEvidence] = []
     parts: list[str] = []
     for stated, series, claim, predicate in (
@@ -158,6 +360,14 @@ def f4_net_reconciliation(graph: ClaimGraph, gate: float, tol: Decimal) -> RuleR
     if opening is None or closing is None:
         return _not_evaluated("F4")
     txns = _transactions(graph)
+    uncounted = _uncounted_movement(txns, gate)
+    if uncounted:
+        return _not_evaluated_because(
+            "F4",
+            f"{uncounted} transaction amount(s) could not be independently confirmed — summing only "
+            f"the confirmed rows would silently exclude real (unconfirmed) movement, so net "
+            f"reconciliation cannot be reliably checked",
+        )
     sum_credit = sum(
         (v for _, cells in txns if (v := _cell(cells.get("credit"), gate)) is not None), Decimal(0)
     )

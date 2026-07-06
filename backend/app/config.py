@@ -210,6 +210,19 @@ class Settings(BaseSettings):
     vlm_indic_provider: str = ""  # "" → no specialist; the default reader handles every script
     vlm_indic_model: str = ""
     vlm_indic_api_key: str = ""
+    # Content-addressed replay cache (forensics/extraction/cache.py; CLAUDE.md §4/§7). Memoizes the one
+    # network-dependent step — the VLM read — keyed by the rendered page bytes, so an identical page is
+    # transcribed by the reader once and thereafter replayed offline (the deterministic cross-read still
+    # re-verifies every box live). Stores only genuine model output, records the original model_id, and
+    # logs a hit as a replay — never a fabricated pass (§3.1). Delete the cache dir to force a fresh read.
+    #   "off"     — no caching; every read is live (production default; semantics unchanged).
+    #   "curated" — a live read is staged; the read path replays ONLY entries the operator explicitly
+    #               saved via /api/vlm-cache (run → review → keep the good ones → replay on re-upload).
+    #   "auto"    — memoize every read straight to the saved tier (no human in the loop).
+    # Set via SATYUM_VLM_CACHE_MODE (e.g. "curated" for a pre-warmed demo that must survive a
+    # rate-limited/offline API).
+    vlm_cache_mode: str = "off"
+    vlm_cache_dir: str = ".vlm_cache"  # SATYUM_VLM_CACHE_DIR — relative to the backend working dir
     # Claim-confidence gate: a cross-read-critical claim below this (or whose cross-read disagreed) is
     # carried as pending, never trusted by a rule (ADR-004 §5.2). DEFAULT — needs calibration.
     vlm_min_confidence: float = 0.55

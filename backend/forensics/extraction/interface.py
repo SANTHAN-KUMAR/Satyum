@@ -61,6 +61,23 @@ class PageImage:
     text_words: tuple[tuple[NormBBox, str], ...] = ()
 
 
+def _validate_norm_bbox(v: NormBBox | None) -> NormBBox | None:
+    # §5.4 hostile-input validation: a box must lie within the page. A malformed/out-of-page box
+    # (including raw pixel coordinates a reader emitted instead of a normalised one — e.g. (263.0,
+    # 193.0, 281.0, 340.0)) is dropped to None here (the value survives but ungrounded → it cannot
+    # pass the cross-read, and downstream page-presence recovery still applies for cross-read-critical
+    # types). Shared by every extracted-value shape — a scalar field is exactly as hostile as a
+    # transaction cell and must be held to the same box-grounding discipline.
+    if v is None:
+        return None
+    x, y, w, h = v
+    if any(not (0.0 <= c <= 1.0) for c in (x, y, w, h)):
+        return None
+    if w <= 0.0 or h <= 0.0 or x + w > 1.0 + 1e-6 or y + h > 1.0 + 1e-6:
+        return None
+    return v
+
+
 class ExtractedValue(BaseModel):
     """A single transcribed value with its grounding — the atom the cross-read re-verifies."""
 
@@ -71,16 +88,7 @@ class ExtractedValue(BaseModel):
     @field_validator("bbox")
     @classmethod
     def _bbox_in_unit_square(cls, v: NormBBox | None) -> NormBBox | None:
-        # §5.4 hostile-input validation: a box must lie within the page. A malformed/out-of-page box
-        # is dropped to None here (the value survives but ungrounded → it cannot pass the cross-read).
-        if v is None:
-            return None
-        x, y, w, h = v
-        if any(not (0.0 <= c <= 1.0) for c in (x, y, w, h)):
-            return None
-        if w <= 0.0 or h <= 0.0 or x + w > 1.0 + 1e-6 or y + h > 1.0 + 1e-6:
-            return None
-        return v
+        return _validate_norm_bbox(v)
 
 
 class ExtractedField(BaseModel):
@@ -96,6 +104,11 @@ class ExtractedField(BaseModel):
     page: int = 0
     bbox: NormBBox | None = None
     confidence: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("bbox")
+    @classmethod
+    def _bbox_in_unit_square(cls, v: NormBBox | None) -> NormBBox | None:
+        return _validate_norm_bbox(v)
 
 
 class ExtractedTransaction(BaseModel):

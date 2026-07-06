@@ -64,6 +64,11 @@ interface VerifyOptions {
   features?: Record<string, unknown>;
   /** Optional applicant-entered PAN. The backend cross-checks it against the document's PAN. */
   claimedPan?: string;
+  /** Optional applicant-entered name. Soft fallback identity check: PAN stays authoritative when
+   *  present, but this is the only cross-check available for a document with no PAN at all (a land
+   *  deed / encumbrance certificate) — without it that class of document had no identity check
+   *  whatsoever (backend forensics/claimed_identity.py). */
+  claimedName?: string;
   /** Password for an encrypted (password-protected) PDF. The backend decrypts it in memory so the
    *  original signed bytes are never re-saved, preserving the signature. */
   password?: string;
@@ -101,6 +106,7 @@ export async function verifyDocument(file: File, opts: VerifyOptions = {}): Prom
   if (opts.docType) form.append("doc_type", opts.docType);
   if (opts.features) form.append("features_json", JSON.stringify(opts.features));
   if (opts.claimedPan) form.append("claimed_pan", opts.claimedPan);
+  if (opts.claimedName) form.append("claimed_name", opts.claimedName);
   if (opts.password) form.append("pdf_password", opts.password);
   if (opts.caseId) form.append("case_id", opts.caseId);
 

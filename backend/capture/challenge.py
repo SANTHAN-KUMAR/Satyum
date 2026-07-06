@@ -39,6 +39,7 @@ import numpy as np
 
 from app.config import settings
 from app.contracts import AnalysisContext, LayerSignal, Mode
+from capture.rectify import find_document_quad
 
 NAME = "active_challenge"
 LAYER = 4
@@ -72,6 +73,16 @@ _JERK_NOTE = (
     "angular-jerk is anti-automation corroboration (a scripted ramp is unnaturally smooth), NOT "
     "anti-screen; reported and weighted separately"
 )
+# Much more lenient than rectify.py's own quality-gate bar (0.20, tuned for a confident OCR-quality
+# rectified crop). Here a missed/approximate quad only means seeding falls back to the whole frame
+# (the pre-fix behaviour) — never a false pass/fail — so a smaller document (an ID card held at a
+# natural distance, not filling a fifth of the frame) still gets its seeding biased away from
+# background clutter instead of getting no help at all.
+_SEED_MASK_MIN_AREA_FRAC = 0.03
+# When quad detection itself fails (messy real-world lighting), bias seeding toward the central 60%
+# of the frame by area rather than seeding the whole frame unmasked — a coarse but real improvement
+# assuming the user was instructed to hold the document roughly centered.
+_CENTER_FALLBACK_FRAC = 0.6
 
 
 def _intrinsics(width: int, height: int) -> np.ndarray:
@@ -87,16 +98,59 @@ def _to_gray(frame: np.ndarray) -> np.ndarray:
     return arr.astype(np.uint8, copy=False)
 
 
+def _center_crop_mask(frame0: np.ndarray) -> np.ndarray:
+    """A mask over the central ``_CENTER_FALLBACK_FRAC`` of the frame (by area).
+
+    Used when contour-based quad detection fails to find the document at all — real capture
+    conditions (uneven lighting, shadows, a hand partly over the edge) are messier than the clean
+    synthetic fixtures the detector is validated against, and failing over to a FULLY unmasked seed
+    (the pre-fix behaviour) would silently reintroduce the exact bug this is meant to fix. A user is
+    instructed to hold the document roughly centered, so biasing seeding toward the frame's center —
+    away from the edges where a face, doorframe, or wall corner is likeliest to sit — is a strictly
+    safer default than no bias at all, even though it's a coarser approximation than a real quad.
+    """
+    h, w = frame0.shape[:2]
+    margin_frac = (1.0 - _CENTER_FALLBACK_FRAC ** 0.5) / 2.0
+    my, mx = int(h * margin_frac), int(w * margin_frac)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[my:h - my, mx:w - mx] = 255
+    return mask
+
+
+def _document_seed_mask(frame0: np.ndarray) -> np.ndarray:
+    """A binary mask biasing corner seeding toward the document, never fully unmasked.
+
+    Without this, ``goodFeaturesToTrack`` seeds anywhere in the frame — the door, the wall, a face,
+    a shirt logo — and a small document (e.g. an ID card) tilted against a busy, static background
+    gets its real motion outvoted by the background's near-zero motion, corrupting the single-
+    homography fit into a FALSE "inconsistent homography / photo-of-screen" verdict on a genuine
+    physical document. Tries the real document quad first (reusing ``capture/rectify.py``'s
+    detector at a more lenient area threshold); if contour detection can't find a confident quad
+    under real, messy lighting, falls back to a center-crop bias (``_center_crop_mask``) rather than
+    no mask at all — a coarser but still real improvement over seeding the whole frame.
+    """
+    quad = find_document_quad(frame0, min_area_frac=_SEED_MASK_MIN_AREA_FRAC)
+    if quad is not None:
+        mask = np.zeros(frame0.shape[:2], dtype=np.uint8)
+        cv2.fillConvexPoly(mask, quad.astype(np.int32), 255)
+        return mask
+    return _center_crop_mask(frame0)
+
+
 def track_corners(frames: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray] | None:
     """Track features from the first to the last frame via pyramidal Lucas-Kanade optical flow.
 
     Returns ``(start_pts, end_pts)`` of the surviving correspondences (Nx2 float32), or ``None`` if
     the document could not be seeded/tracked. Points are chained frame-to-frame so the end points
-    correspond to the same physical features as the start points.
+    correspond to the same physical features as the start points. Seeding is restricted to the
+    document's own quad when one can be found (see ``_document_seed_mask``) so a small document
+    against a busy background doesn't get outvoted by static background texture.
     """
     g0 = _to_gray(frames[0])
+    mask = _document_seed_mask(frames[0])
     seed = cv2.goodFeaturesToTrack(
-        g0, maxCorners=_MAX_CORNERS, qualityLevel=_CORNER_QUALITY, minDistance=_CORNER_MIN_DIST
+        g0, maxCorners=_MAX_CORNERS, qualityLevel=_CORNER_QUALITY, minDistance=_CORNER_MIN_DIST,
+        mask=mask,
     )
     if seed is None or len(seed) < _MIN_TRACKED:
         return None
@@ -298,6 +352,21 @@ class ActiveChallengeAnalyzer:
         suspicion = _suspicion(axis_ok, magnitude_ok, consistent)
         scripted = jerk_cv < _JERK_SCRIPTED_MAX
 
+        # A closed set of machine-readable codes for the live-capture UI to map to plain language and
+        # on-screen guidance, kept SEPARATE from the technical `reason` string below (which stays
+        # verbatim/untouched for the underwriter evidence console, CLAUDE.md §9). Additive-only field
+        # in `measurements: dict[str, Any]` — no wire-contract break.
+        if suspicion <= 0.1 and scripted:
+            reason_code = "live_ok_scripted_suspected"
+        elif suspicion <= 0.1:
+            reason_code = "live_ok"
+        elif not consistent:
+            reason_code = "inconsistent_homography"
+        elif not axis_ok:
+            reason_code = "wrong_axis"
+        else:
+            reason_code = "wrong_magnitude"
+
         measurements: dict[str, Any] = {
             "commanded_axis": cmd_axis,
             "commanded_magnitude_deg": round(cmd_mag, 2),
@@ -313,7 +382,10 @@ class ActiveChallengeAnalyzer:
             "scripted_motion_suspected": scripted,
             "honest_bound": _HONEST_BOUND,
             "jerk_note": _JERK_NOTE,
+            "reason_code": reason_code,
         }
+        if reason_code == "wrong_magnitude":
+            measurements["needs_more_or_less"] = "more" if realised_cmd < cmd_mag else "less"
 
         if suspicion <= 0.1 and scripted:
             reason = (

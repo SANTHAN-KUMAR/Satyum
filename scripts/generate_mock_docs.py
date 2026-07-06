@@ -118,10 +118,10 @@ def generate_form_16(output_path: str):
     print(f"Generated: {output_path}")
 
 def main():
-    os.makedirs("demo_docs", exist_ok=True)
-    generate_salary_slip("demo_docs/mock_salary_slip.pdf")
-    generate_form_16("demo_docs/mock_form_16.pdf")
-    print("Mock documents for cross-graph verification created in 'demo_docs/'.")
+    os.makedirs("samples/mock_docs", exist_ok=True)
+    generate_salary_slip("samples/mock_docs/mock_salary_slip.pdf")
+    generate_form_16("samples/mock_docs/mock_form_16.pdf")
+    print("Mock documents for cross-graph verification created in 'samples/mock_docs/'.")
 
 if __name__ == "__main__":
     main()
